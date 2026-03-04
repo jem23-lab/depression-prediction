@@ -1,0 +1,21 @@
+#FastMCP (simplifies servers setup)
+mcp[cli]
+
+# Google Gemini SDK
+google-generativeai
+
+# Machine Learning + XAI
+scikit-learn
+pandas
+numpy
+shap
+dice-ml
+
+# LLMs (offline option)
+transformers
+torch
+accelerate
+llama-cpp-python
+
+# Utilities
+jsonschema>=4.21.1
