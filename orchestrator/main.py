@@ -6,11 +6,29 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from datetime import datetime
 from contextlib import AsyncExitStack
+import logging
 
 # ====== Configuration & Paths ======
 base_path = os.path.dirname(__file__)
 MEMORY_FILE = os.path.join(base_path, "long_term_memory.json")
 LOG_BASE = os.path.join(base_path, "logs")
+
+# Ensure directories exist for logs and memory
+os.makedirs(LOG_BASE, exist_ok=True)
+os.makedirs(os.path.dirname(MEMORY_FILE), exist_ok=True)
+
+# Logging setup
+logfile = os.path.join(LOG_BASE, "orchestrator.log")
+logging.basicConfig(
+    filename=logfile,
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# Timeouts (seconds) — conservative defaults, can be tuned
+GENERATION_TIMEOUT = float(os.getenv("GENERATION_TIMEOUT", "30"))
+TOOL_CALL_TIMEOUT = float(os.getenv("TOOL_CALL_TIMEOUT", "20"))
 
 # Initialize Gemini
 GOOGLE_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -18,14 +36,81 @@ genai.configure(api_key=GOOGLE_API_KEY)
 # We use gemini-2.5-flash for better reflection/reasoning capabilities
 model = genai.GenerativeModel("gemini-2.5-flash")
 
+
+# Async wrapper for blocking model calls with timeout and logging
+async def a_generate_content(prompt: str, **kwargs) -> str:
+    """Run model.generate_content in a thread and return .text, with timeout.
+
+    Raises asyncio.TimeoutError on timeout and re-raises other exceptions.
+    """
+    logger.debug("a_generate_content: prompt length=%d", len(prompt) if prompt is not None else 0)
+
+    try:
+        # run in thread to avoid blocking the event loop
+        res = await asyncio.wait_for(asyncio.to_thread(lambda: model.generate_content(prompt, **kwargs)), timeout=GENERATION_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning("Model generation timed out after %s seconds", GENERATION_TIMEOUT)
+        raise
+    except Exception:
+        logger.exception("Model generation raised an unexpected exception")
+        raise
+
+    # defensive: ensure .text exists
+    text = getattr(res, "text", None)
+    if text is None:
+        logger.warning("Model response has no .text attribute; falling back to str(response)")
+        text = str(res)
+    logger.debug("a_generate_content: response length=%d", len(text))
+    return text
+
 # Server configs — map logical server name to script filename
-# xai_server  exposes: predict_depression, explain_prediction, get_counterfactual
+# xai_server  exposes: predict_depression, shap_text_explain, generate_text_counterfactual, get_top_contributing_words
 # knowledge_server exposes: query_knowledge
+# logger_server exposes: log_event
 server_configs = {
     "xai": "servers/xai_server.py",
     "knowledge": "servers/knowledge_server.py",
     "logger": "servers/logger_server.py",
 }
+
+
+# Canonical tool aliases (orchestrator preferred names -> server registered names)
+TOOL_ALIASES = {
+    "predict_depression": "predict_depression",
+    "explain_prediction": "shap_text_explain",
+    "get_counterfactual": "generate_text_counterfactual",
+    "top_contributing_words": "get_top_contributing_words",
+    "query_knowledge": "query_knowledge",
+    "log_event": "log_event",
+}
+
+
+# Helper: normalize and extract tool results robustly
+def _extract_tool_result(result) -> dict:
+    """Normalize various tool call result formats into a dict:
+    returns {'ok': True, 'raw': str, 'json': dict|None}
+    """
+    raw_text = None
+    parsed = None
+    try:
+        # Common mcp client result has .content which is a list of objects with .text
+        content = getattr(result, "content", None)
+        if isinstance(content, list) and len(content) and hasattr(content[0], "text"):
+            raw_text = content[0].text
+        elif isinstance(content, str):
+            raw_text = content
+        else:
+            raw_text = str(result)
+
+        # try parse JSON
+        try:
+            parsed = json.loads(raw_text)
+        except Exception:
+            parsed = None
+    except Exception:
+        logger.exception("Failed to extract tool result")
+        raw_text = str(result)
+    return {"ok": True, "raw": raw_text, "json": parsed}
 
 
 # ====== 1. Conversational Memory Management ======
@@ -64,7 +149,9 @@ class SessionMemory:
                 with open(MEMORY_FILE, "r") as f:
                     return json.load(f)
             except json.JSONDecodeError:
-                pass
+                logger.warning("Long-term memory file exists but contains invalid JSON: %s", MEMORY_FILE)
+            except Exception:
+                logger.exception("Error reading long-term memory file: %s", MEMORY_FILE)
         return {"sessions": []}
 
     def _build_lt_summary_string(self) -> str:
@@ -91,8 +178,12 @@ class SessionMemory:
         })
         # Keep only the last 20 sessions to avoid unbounded growth
         self._lt_data["sessions"] = sessions[-20:]
-        with open(MEMORY_FILE, "w") as f:
-            json.dump(self._lt_data, f, indent=2)
+        try:
+            with open(MEMORY_FILE, "w") as f:
+                json.dump(self._lt_data, f, indent=2)
+            logger.info("Saved long-term memory to %s", MEMORY_FILE)
+        except Exception:
+            logger.exception("Failed to write long-term memory to %s", MEMORY_FILE)
 
     # ------------------------------------------------------------------
     # Short-term chat memory
@@ -177,7 +268,8 @@ Your goal is to provide explainable depression assessments by orchestrating four
 
 TOOL ROLES:
 - predict_depression   → classify a user statement into a depression severity class
-- shap_text_explain   → run SHAP token-level attribution to explain WHY a prediction was made
+- shap_text_eclear
+xplain   → run SHAP token-level attribution to explain WHY a prediction was made
 - generate_text_counterfactual   → use DiCE/TextAttack to show WHAT WOULD CHANGE the prediction
 - query_knowledge      → retrieve DSM-5 / ICD-11 clinical grounding via RAG
 
@@ -193,6 +285,7 @@ REASONING GUIDELINES:
 async def run_agentic_dialogue():
     memory = SessionMemory()
     print(f"--- Session Started ---")
+    logger.info("Session started. Long-term context: %s", memory.long_term_summary[:200])
     print(f"Long-term context:\n{memory.long_term_summary[:200]}...\n")
 
     async with AsyncExitStack() as stack:
@@ -210,6 +303,17 @@ async def run_agentic_dialogue():
                 all_tools.append({"name": t.name, "desc": t.description, "schema": t.inputSchema, "session": session})
             sessions[name] = session
 
+        # Build alias resolution map for orchestrator-preferred names -> actual registered tool names
+        available_tools = {t["name"]: t for t in all_tools}
+        alias_to_actual = {}
+        for canon, registered in TOOL_ALIASES.items():
+            if registered in available_tools:
+                alias_to_actual[canon] = registered
+            elif canon in available_tools:
+                alias_to_actual[canon] = canon
+            else:
+                logger.warning("Tool alias '%s' (registered='%s') not found among available tools", canon, registered)
+
         while True:
             user_input = input("\nUser > ").strip()
             if user_input.lower() in ["exit", "quit"]:
@@ -220,19 +324,21 @@ async def run_agentic_dialogue():
                     f"Conversation:\n{memory.get_context_string()}\n"
                     f"Reasoning steps:\n{memory.get_reasoning_context()}"
                 )
-                summary = model.generate_content(summary_prompt).text
+                try:
+                    summary = await a_generate_content(summary_prompt)
+                except asyncio.TimeoutError:
+                    logger.warning("Summary generation timed out; saving minimal summary")
+                    summary = "Session ended (summary timed out)."
+                except Exception:
+                    logger.exception("Failed to generate session summary; using placeholder")
+                    summary = "Session ended (summary generation failed)."
+
                 memory.save_long_term(summary)
                 print("\n[Session summary saved. Goodbye.]")
                 break
 
             # ----------------------------------------------------------------
             # STEP 1: Session-Aware Intent Recognition & Tool Selection
-            #
-            # The plan prompt now includes:
-            #   - cross-session long-term summary
-            #   - recent chat turns (short-term)
-            #   - prior tool calls + conclusions from THIS session (reasoning_steps)
-            # This lets the planner avoid redundant calls and build on past work.
             # ----------------------------------------------------------------
             context_string     = memory.get_context_string()
             reasoning_context  = memory.get_reasoning_context()
@@ -269,8 +375,9 @@ async def run_agentic_dialogue():
                 - Respond ONLY with valid JSON: {{"tool": "tool_name", "args": {{...}}}}
                 """
 
-            plan_response = model.generate_content(plan_prompt).text
             try:
+                plan_response = await a_generate_content(plan_prompt)
+                logger.debug("Plan response: %s", plan_response[:1000])
                 # Clean and parse tool call
                 tool_call = json.loads(plan_response.replace("```json", "").replace("```", "").strip())
                 tool_name = tool_call["tool"]
@@ -278,7 +385,6 @@ async def run_agentic_dialogue():
 
                 # ----------------------------------------------------------------
                 # Auto-inject last prediction text into explain/counterfactual args
-                # so the planner never needs to re-state the input text manually.
                 # ----------------------------------------------------------------
                 if tool_name in ("explain_prediction", "get_counterfactual"):
                     last_predict = next(
@@ -288,20 +394,37 @@ async def run_agentic_dialogue():
                     if last_predict and "text" not in tool_args:
                         tool_args["text"] = last_predict["args"].get("text", "")
 
-                tool_meta = next(t for t in all_tools if t["name"] == tool_name)
+                # Resolve alias -> actual registered tool name
+                actual_tool = alias_to_actual.get(tool_name, tool_name)
+                if actual_tool not in available_tools:
+                    logger.error("Requested tool '%s' resolved to '%s' which is not available", tool_name, actual_tool)
+                    raise RuntimeError(f"Tool not available: {tool_name} -> {actual_tool}")
+
+                tool_meta = available_tools[actual_tool]
 
                 # ----------------------------------------------------------------
                 # STEP 2: Execution & Intermediate Storage
                 # ----------------------------------------------------------------
-                result   = await tool_meta["session"].call_tool(tool_name, tool_args)
-                raw_data = result.content[0].text
+                try:
+                    logger.info("Calling tool '%s' (resolved=%s) with args=%s", tool_name, actual_tool, tool_args)
+                    raw_result_obj = await asyncio.wait_for(tool_meta["session"].call_tool(actual_tool, tool_args), timeout=TOOL_CALL_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning("Tool call '%s' timed out after %s seconds", actual_tool, TOOL_CALL_TIMEOUT)
+                    raise
+                except Exception:
+                    logger.exception("Tool call '%s' failed", actual_tool)
+                    raise
+
+                # robust extraction of tool output
+                extracted = _extract_tool_result(raw_result_obj)
+                raw_data = extracted.get("raw")
+                parsed_json = extracted.get("json")
+
                 memory.intermediate_outputs[tool_name] = raw_data
+                logger.debug("Tool '%s' (resolved=%s) returned data length=%d", tool_name, actual_tool, len(raw_data) if raw_data is not None else 0)
 
                 # ----------------------------------------------------------------
                 # STEP 3: Iterative Explanation Generation
-                #
-                # If there is a prior explanation for this same tool, inject it so
-                # the model can refine/extend rather than start from scratch.
                 # ----------------------------------------------------------------
                 prior_explanation = memory.get_last_explanation(tool_name)
                 if prior_explanation:
@@ -318,46 +441,47 @@ async def run_agentic_dialogue():
                     f"{iterative_note}\n"
                     f"Provide a natural, clinically grounded explanation:"
                 )
-                draft_explanation = model.generate_content(explanation_prompt).text
+                try:
+                    draft_explanation = await a_generate_content(explanation_prompt)
+                except asyncio.TimeoutError:
+                    logger.warning("Explanation generation timed out for tool '%s'", tool_name)
+                    draft_explanation = "(explanation generation timed out)"
 
                 # ----------------------------------------------------------------
                 # STEP 4: Reflection Mechanism
-                #
-                # The agent critiques its own draft against:
-                #   - the short-term conversation context
-                #   - any knowledge-base grounding already retrieved
-                #   - the prior explanation (for consistency across turns)
-                # It returns the refined explanation AND a flag indicating whether
-                # a change was actually made — stored in reasoning_steps for audit.
                 # ----------------------------------------------------------------
                 reflection_prompt = f"""
                     You are reviewing a draft clinical explanation for quality and consistency.
-                    
+
                     === Draft Explanation ===
                     {draft_explanation}
-                    
+
                     === Conversation Context ===
                     {context_string}
-                    
+
                     === Clinical Knowledge Grounding ===
                     {memory.intermediate_outputs.get('query_knowledge', 'Not yet retrieved.')}
-                    
+
                     === Prior Explanation for This Topic ===
                     {prior_explanation or 'None — this is the first explanation for this tool.'}
-                    
+
                     Review checklist:
                     1. Does the draft contradict any clinical knowledge or previous explanations?
                     2. Is it clear and jargon-free for a clinician?
                     3. Does it meaningfully build on prior context rather than repeating it?
-                    
+
                     If the draft passes all checks, output exactly:
                     NO_CHANGE: <repeat the draft>
-                    
+
                     If refinement is needed, output exactly:
                     REFINED: <your improved explanation>
                     """
 
-                reflection_raw = model.generate_content(reflection_prompt).text.strip()
+                try:
+                    reflection_raw = (await a_generate_content(reflection_prompt)).strip()
+                except asyncio.TimeoutError:
+                    logger.warning("Reflection generation timed out for tool '%s'", tool_name)
+                    reflection_raw = "NO_CHANGE: " + draft_explanation
 
                 # Parse reflection output to detect whether a change was made
                 if reflection_raw.startswith("REFINED:"):
@@ -387,6 +511,7 @@ async def run_agentic_dialogue():
 
             except Exception as e:
                 # Log the parse error for debugging, then fall back to direct chat
+                logger.exception("Orchestrator tool dispatch failed: %s", e)
                 print(f"[Orchestrator] Tool dispatch failed ({type(e).__name__}: {e}). Falling back to direct chat.")
                 fallback_prompt = (
                     f"{SYSTEM_PROMPT}\n"
@@ -394,7 +519,15 @@ async def run_agentic_dialogue():
                     f"{context_string}\n"
                     f"User: {user_input}"
                 )
-                response = model.generate_content(fallback_prompt).text
+                try:
+                    response = await a_generate_content(fallback_prompt)
+                except asyncio.TimeoutError:
+                    logger.warning("Fallback generation timed out; sending minimal reply")
+                    response = "I'm sorry, I'm having trouble responding right now. Please try again."
+                except Exception:
+                    logger.exception("Fallback generation failed")
+                    response = "I'm sorry, I'm having trouble responding right now."
+
                 print(f"\nAssistant > {response.strip()}")
                 memory.add_turn("user", user_input)
                 memory.add_turn("assistant", response)
