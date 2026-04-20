@@ -17,10 +17,17 @@ LOG_BASE = os.path.join(base_path, "logs")
 os.makedirs(LOG_BASE, exist_ok=True)
 os.makedirs(os.path.dirname(MEMORY_FILE), exist_ok=True)
 
-# Logging setup
-logfile = os.path.join(LOG_BASE, "orchestrator.log")
+# Force all logging to go into the orchestrator logs directory from now on
+# (logger_server reads XAI_LOG_DIR environment variable). We do not delete or
+# move existing top-level logs; the user said they will remove them manually.
+os.environ["XAI_LOG_DIR"] = LOG_BASE
+
+# Logging setup (orchestrator-level)
+# Use a per-run timestamped log file. Each interactive session will also request a session log from the logger server.
+session_ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+orchestrator_logfile = os.path.join(LOG_BASE, f"orchestrator-{session_ts}.log")
 logging.basicConfig(
-    filename=logfile,
+    filename=orchestrator_logfile,
     level=logging.DEBUG,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
@@ -66,7 +73,7 @@ async def a_generate_content(prompt: str, **kwargs) -> str:
 # Server configs — map logical server name to script filename
 # xai_server  exposes: predict_depression, shap_text_explain, generate_text_counterfactual, get_top_contributing_words
 # knowledge_server exposes: query_knowledge
-# logger_server exposes: log_event
+# logger_server exposes: log_event, start_session_log
 server_configs = {
     "xai": "servers/xai_server.py",
     "knowledge": "servers/knowledge_server.py",
@@ -137,6 +144,9 @@ class SessionMemory:
         self._lt_data = self._load_long_term_file()
         # Provide a compact summary string for prompt injection
         self.long_term_summary: str = self._build_lt_summary_string()
+
+        # session-specific log path (provided by logger_server)
+        self.session_log_path: str | None = None
 
     # ------------------------------------------------------------------
     # Long-term helpers
@@ -268,8 +278,7 @@ Your goal is to provide explainable depression assessments by orchestrating four
 
 TOOL ROLES:
 - predict_depression   → classify a user statement into a depression severity class
-- shap_text_eclear
-xplain   → run SHAP token-level attribution to explain WHY a prediction was made
+- shap_text_explain   → run SHAP token-level attribution to explain WHY a prediction was made
 - generate_text_counterfactual   → use DiCE/TextAttack to show WHAT WOULD CHANGE the prediction
 - query_knowledge      → retrieve DSM-5 / ICD-11 clinical grounding via RAG
 
@@ -314,6 +323,25 @@ async def run_agentic_dialogue():
             else:
                 logger.warning("Tool alias '%s' (registered='%s') not found among available tools", canon, registered)
 
+        # Request a per-session log from logger server if available
+        logger_session_path = None
+        if 'log_event' in available_tools and 'start_session_log' in [t['name'] for t in all_tools]:
+            try:
+                # find the logger session and call start_session_log
+                logger_meta = available_tools.get('log_event')
+                # call start_session_log via that session
+                logger_session = next((t for t in all_tools if t['name'] == 'start_session_log'), None)
+                if logger_session:
+                    resp = await logger_session['session'].call_tool('start_session_log', {})
+                    extracted = _extract_tool_result(resp)
+                    j = extracted.get('json')
+                    if j and j.get('ok'):
+                        logger_session_path = j.get('path')
+                        memory.session_log_path = logger_session_path
+                        logger.info("Orchestrator obtained session log path: %s", logger_session_path)
+            except Exception:
+                logger.exception("Failed to obtain session log path from logger server")
+
         while True:
             user_input = input("\nUser > ").strip()
             if user_input.lower() in ["exit", "quit"]:
@@ -343,36 +371,42 @@ async def run_agentic_dialogue():
             context_string     = memory.get_context_string()
             reasoning_context  = memory.get_reasoning_context()
 
+            # Instruct the planner to be concise in final assistant responses and to only call knowledge when needed
             plan_prompt = f"""
                 {SYSTEM_PROMPT}
-                
+
                 === Cross-Session Memory ===
                 {memory.long_term_summary}
-                
+
                 === Recent Conversation (Short-Term) ===
                 {context_string}
-                
+
                 === Prior Tool Calls This Session ===
                 {reasoning_context}
-                
+
                 === Current User Input ===
                 {user_input}
-                
+
                 === Available Tools ===
                 {chr(10).join(
                     f'- {t["name"]}: {t["desc"]}  |  args schema: {json.dumps(t["schema"])}'
                     for t in all_tools
                 )}
-                
+
                 Tool selection rules:
                 - Use "predict_depression"   : when the user shares a statement / feeling and wants a diagnosis or class label.
                 - Use "explain_prediction"   : when the user asks WHY, WHAT FACTORS, or WHICH WORDS drove the prediction (SHAP).
                 - Use "get_counterfactual"   : when the user asks WHAT IF, HOW TO IMPROVE, or wants alternative phrasing (DiCE).
-                - Use "query_knowledge"      : when the user asks about clinical criteria, DSM-5/ICD-11 definitions, or background.
-                - If this is a follow-up question about a topic already explained (see Prior Tool Calls),
-                  prefer the same tool so the explanation can be iteratively refined.
+                - Use "query_knowledge"      : only when the user explicitly asks for clinical definitions, DSM/ICD criteria, or requests citations.
+                - If this is a follow-up question about a topic already explained (see Prior Tool Calls), prefer the same tool so the explanation can be iteratively refined.
                 - Do NOT repeat a tool call with identical args if the result is already in Prior Tool Calls.
-                - Respond ONLY with valid JSON: {{"tool": "tool_name", "args": {{...}}}}
+
+                Output format MUST be JSON exactly: {{"tool": "tool_name", "args": {{...}}}}
+
+                Final assistant reply requirements:
+                - Keep final human-facing replies short (1-3 sentences), non-judgmental and easy to understand.
+                - When clinical knowledge is referenced, explicitly cite text returned by the knowledge tool; do NOT hallucinate.
+                - If knowledge is unavailable, rely on model/tool outputs and be transparent (e.g., "Model-based result: ..." or "Insufficient clinical evidence.").
                 """
 
             try:
@@ -402,23 +436,54 @@ async def run_agentic_dialogue():
 
                 tool_meta = available_tools[actual_tool]
 
-                # ----------------------------------------------------------------
-                # STEP 2: Execution & Intermediate Storage
-                # ----------------------------------------------------------------
-                try:
-                    logger.info("Calling tool '%s' (resolved=%s) with args=%s", tool_name, actual_tool, tool_args)
-                    raw_result_obj = await asyncio.wait_for(tool_meta["session"].call_tool(actual_tool, tool_args), timeout=TOOL_CALL_TIMEOUT)
-                except asyncio.TimeoutError:
-                    logger.warning("Tool call '%s' timed out after %s seconds", actual_tool, TOOL_CALL_TIMEOUT)
-                    raise
-                except Exception:
-                    logger.exception("Tool call '%s' failed", actual_tool)
-                    raise
+                # If the planner requested knowledge but knowledge server is not present, treat as unavailable
+                if tool_name == 'query_knowledge' and actual_tool not in available_tools:
+                    logger.info("Planner requested knowledge but knowledge tool not available; returning no-knowledge response")
+                    raw_result_obj = type('R', (), {'content': ['{"ok": false, "error": "knowledge tool missing"}']})()
+                else:
+                    # ----------------------------------------------------------------
+                    # STEP 2: Execution & Intermediate Storage
+                    # ----------------------------------------------------------------
+                    try:
+                        logger.info("Calling tool '%s' (resolved=%s) with args=%s", tool_name, actual_tool, tool_args)
+                        # Log the tool call to session log if available
+                        if memory.session_log_path:
+                            try:
+                                await sessions['logger'].call_tool('log_event', {'message': f"CALL {actual_tool}", 'level': 'INFO', 'payload': {'args': tool_args}, 'session_log_path': memory.session_log_path})
+                            except Exception:
+                                logger.exception("Failed to write call record to logger server")
+
+                        raw_result_obj = await asyncio.wait_for(tool_meta["session"].call_tool(actual_tool, tool_args), timeout=TOOL_CALL_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        logger.warning("Tool call '%s' timed out after %s seconds", actual_tool, TOOL_CALL_TIMEOUT)
+                        # record timeout in session log
+                        if memory.session_log_path:
+                            try:
+                                await sessions['logger'].call_tool('log_event', {'message': f"TIMEOUT {actual_tool}", 'level': 'WARNING', 'payload': {'args': tool_args}, 'session_log_path': memory.session_log_path})
+                            except Exception:
+                                logger.exception("Failed to write timeout record to logger server")
+                        raise
+                    except Exception:
+                        logger.exception("Tool call '%s' failed", actual_tool)
+                        # record error in session log
+                        if memory.session_log_path:
+                            try:
+                                await sessions['logger'].call_tool('log_event', {'message': f"ERROR {actual_tool}", 'level': 'ERROR', 'payload': {'args': tool_args}, 'session_log_path': memory.session_log_path})
+                            except Exception:
+                                logger.exception("Failed to write error record to logger server")
+                        raise
 
                 # robust extraction of tool output
                 extracted = _extract_tool_result(raw_result_obj)
                 raw_data = extracted.get("raw")
                 parsed_json = extracted.get("json")
+
+                # Log the tool result to session log
+                if memory.session_log_path:
+                    try:
+                        await sessions['logger'].call_tool('log_event', {'message': f"RESULT {actual_tool}", 'level': 'INFO', 'payload': {'raw': raw_data}, 'session_log_path': memory.session_log_path})
+                    except Exception:
+                        logger.exception("Failed to write result record to logger server")
 
                 memory.intermediate_outputs[tool_name] = raw_data
                 logger.debug("Tool '%s' (resolved=%s) returned data length=%d", tool_name, actual_tool, len(raw_data) if raw_data is not None else 0)
@@ -435,11 +500,12 @@ async def run_agentic_dialogue():
                 else:
                     iterative_note = ""
 
+                # Make assistant final output concise: ask model to produce shorter final replies
                 explanation_prompt = (
                     f"User: {user_input}\n"
                     f"Tool Result: {raw_data}\n"
                     f"{iterative_note}\n"
-                    f"Provide a natural, clinically grounded explanation:"
+                    f"Provide a concise (max 3 sentences), clinically grounded, non-hallucinating explanation that references knowledge only when present."
                 )
                 try:
                     draft_explanation = await a_generate_content(explanation_prompt)
@@ -467,8 +533,8 @@ async def run_agentic_dialogue():
 
                     Review checklist:
                     1. Does the draft contradict any clinical knowledge or previous explanations?
-                    2. Is it clear and jargon-free for a clinician?
-                    3. Does it meaningfully build on prior context rather than repeating it?
+                    2. Is it clear and jargon-free for a layperson?
+                    3. Is it concise (1-3 sentences)?
 
                     If the draft passes all checks, output exactly:
                     NO_CHANGE: <repeat the draft>
@@ -492,6 +558,13 @@ async def run_agentic_dialogue():
                     final_output = draft_explanation.strip()
                     was_refined  = False
 
+                # Log the final output to session log
+                if memory.session_log_path:
+                    try:
+                        await sessions['logger'].call_tool('log_event', {'message': f"FINAL {actual_tool}", 'level': 'INFO', 'payload': {'final': final_output}, 'session_log_path': memory.session_log_path})
+                    except Exception:
+                        logger.exception("Failed to write final output record to logger server")
+
                 # ----------------------------------------------------------------
                 # Store the complete reasoning step for future session-awareness
                 # ----------------------------------------------------------------
@@ -512,12 +585,20 @@ async def run_agentic_dialogue():
             except Exception as e:
                 # Log the parse error for debugging, then fall back to direct chat
                 logger.exception("Orchestrator tool dispatch failed: %s", e)
+                # Also write the error to session log if possible
+                if memory.session_log_path:
+                    try:
+                        await sessions['logger'].call_tool('log_event', {'message': f"ORCHESTRATOR_ERROR", 'level': 'ERROR', 'payload': {'error': str(e)}, 'session_log_path': memory.session_log_path})
+                    except Exception:
+                        logger.exception("Failed to write orchestrator error to logger server")
+
                 print(f"[Orchestrator] Tool dispatch failed ({type(e).__name__}: {e}). Falling back to direct chat.")
                 fallback_prompt = (
                     f"{SYSTEM_PROMPT}\n"
                     f"Session Memory: {memory.long_term_summary}\n"
                     f"{context_string}\n"
-                    f"User: {user_input}"
+                    f"User: {user_input}\n"
+                    f"Please produce a concise (max 3 sentences) reply. If you reference clinical knowledge, state that it's from memory or indicate that knowledge wasn't queried."
                 )
                 try:
                     response = await a_generate_content(fallback_prompt)

@@ -52,22 +52,68 @@ def init_model() -> bool:
         _model.to(DEVICE)
         _model.eval()
 
-        # Initialize SHAP Explainer
-        try:
-            _explainer = shap.Explainer(_model, _tokenizer)
-        except Exception:
-            # SHAP explainer can be fragile; log but don't crash
-            logger.exception("Failed to initialize SHAP explainer; explanations may fail")
-            _explainer = None
-
         # label map
-        if hasattr(_model.config, 'id2label'):
+        if hasattr(_model.config, 'id2label') and _model.config.id2label:
             label_map = _model.config.id2label
         else:
             # keep a minimal default if model lacks mapping
             label_map = {0: "severe", 1: "moderate", 2: "not depression"}
         # store on model config for later use
         _model.config.id2label = label_map
+
+        # Initialize SHAP Explainer with a tokenizer-aware masker. We use a simple function wrapper
+        # so SHAP sees a callable that returns model outputs given raw strings.
+        def f_texts(texts: List[str]):
+            try:
+                # Coerce various input shapes that SHAP may pass (np.ndarray, list of tokens, etc.)
+                import numpy as _np
+
+                # If a single string is provided, wrap in list
+                if isinstance(texts, (str, bytes)):
+                    texts = [texts]
+                # If numpy array, convert to list
+                elif isinstance(texts, _np.ndarray):
+                    texts = texts.tolist()
+
+                # Now ensure each element is a plain string. SHAP may pass lists of tokens;
+                # join them with spaces to produce a textual input acceptable to the tokenizer.
+                def _ensure_str(x):
+                    if isinstance(x, (list, tuple)):
+                        return " ".join(map(str, x))
+                    if isinstance(x, bytes):
+                        try:
+                            return x.decode('utf-8')
+                        except Exception:
+                            return str(x)
+                    return str(x)
+
+                texts = [_ensure_str(t) for t in texts]
+
+                enc = _tokenizer(texts, padding=True, truncation=True, return_tensors='pt')
+                # Move tensors to device if they exist
+                enc = {k: v.to(DEVICE) for k, v in enc.items()}
+                with torch.no_grad():
+                    outputs = _model(**enc)
+                    logits = outputs.logits
+                    probs = torch.softmax(logits, dim=-1).cpu().numpy()
+                return probs
+            except Exception:
+                logger.exception("Model wrapper failed inside SHAP f_texts")
+                raise
+
+        # Use shap.Explainer with the callable model and masker='text'
+        try:
+            masker = shap.maskers.Text(_tokenizer)
+            _explainer = shap.Explainer(f_texts, masker)
+            logger.info("SHAP explainer initialized with text masker")
+        except Exception:
+            # As a more robust fallback, create a partition explainer without a special masker
+            try:
+                _explainer = shap.Explainer(f_texts)
+                logger.info("SHAP explainer initialized (fallback) without text masker")
+            except Exception:
+                logger.exception("Failed to initialize SHAP explainer; explanations may fail")
+                _explainer = None
 
         _initialized = True
         logger.info("Model initialization complete")
@@ -76,10 +122,6 @@ def init_model() -> bool:
         logger.exception("Model initialization failed")
         _initialized = False
         return False
-
-
-# Try to initialize but do not crash on errors
-# NOTE: removed implicit initialization to avoid heavy downloads at import time; tools will call init_model() lazily.
 
 
 # ====== Helper Functions ======
@@ -147,19 +189,56 @@ def shap_text_explain(text: str) -> Dict[str, Any]:
         pred_idx = int(np.argmax(probs))
         label_map = _model.config.id2label
 
-        # 2. Generate SHAP values for the text
+        # 2. Generate SHAP values for the text. We request explanations for a single sample.
         shap_values = _explainer([text])
 
-        # 3. Extract tokens and their specific impact values for the predicted class
-        token_impacts = shap_values.values[0, :, pred_idx].tolist()
-        tokens = shap_values.data[0].tolist()
+        # shap_values.data may be a list of tokens or strings depending on masker
+        # Normalize tokens and values robustly
+        try:
+            tokens = list(shap_values.data[0])
+        except Exception:
+            # fallback: try converting to numpy/string
+            try:
+                tokens = shap_values.data
+            except Exception:
+                tokens = [str(text)]
+
+        try:
+            # shap_values.values shape: (n_examples, n_tokens, n_classes) or (n_examples, n_tokens)
+            vals = np.array(shap_values.values)
+            if vals.ndim == 3:
+                token_impacts = vals[0, :, pred_idx].tolist()
+            elif vals.ndim == 2:
+                token_impacts = vals[0, :].tolist()
+            else:
+                token_impacts = vals.flatten().tolist()
+        except Exception:
+            logger.exception("Failed to parse shap values structure; returning empty impacts")
+            token_impacts = [0.0] * len(tokens)
+
+        base_val = None
+        try:
+            bv = shap_values.base_values
+            if isinstance(bv, (list, np.ndarray)):
+                bv_arr = np.array(bv)
+                if bv_arr.ndim == 2:
+                    base_val = float(bv_arr[0, pred_idx])
+                elif bv_arr.ndim == 1:
+                    base_val = float(bv_arr[0])
+                else:
+                    base_val = float(bv_arr.flatten()[0])
+            else:
+                base_val = float(bv)
+        except Exception:
+            base_val = None
 
         return {
             "ok": True,
             "predicted_label": label_map.get(pred_idx, str(pred_idx)),
             "tokens": tokens,
             "shap_values": token_impacts,
-            "base_value": float(shap_values.base_values[0, pred_idx])
+            "base_value": base_val,
+            "model_probabilities": {label_map.get(i, str(i)): float(probs[i]) for i in range(len(probs))}
         }
     except Exception:
         logger.exception("shap_text_explain failed for input (truncated): %s", str(text)[:200])
@@ -179,12 +258,18 @@ def get_top_contributing_words(text: str, k: int = 5) -> Dict[str, Any]:
         vals = np.array(exp["shap_values"])
         tokens = exp["tokens"]
 
+        if len(vals) != len(tokens):
+            # align lengths conservatively
+            n = min(len(vals), len(tokens))
+            vals = vals[:n]
+            tokens = tokens[:n]
+
         # Sort by SHAP value (positive contribution)
         top_indices = np.argsort(vals)[::-1][:k]
 
         top_words = [
             {"word": tokens[i], "impact": float(vals[i])}
-            for i in top_indices if vals[i] > 0
+            for i in top_indices if float(vals[i]) > 0
         ]
 
         return {"ok": True, "prediction": exp["predicted_label"], "top_impact_words": top_words}
