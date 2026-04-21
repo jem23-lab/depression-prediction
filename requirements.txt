@@ -19,3 +19,5 @@ llama-cpp-python
 
 # Utilities
 jsonschema>=4.21.1
+
+python-telegram-bot>=21.0
