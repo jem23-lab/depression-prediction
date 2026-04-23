@@ -1,104 +1,79 @@
 """
-shap_explainer.py
+shap_explainer/shap_explainer.py
 ────────────────────────────────────────────────────────────────────
-Use Case 1: SHAP → structured prompt → Gemini → plain-English explanation.
-
-Pipeline (matches notebook cell [29]):
-  SHAPResult
-      → build_shap_prompt()   builds a rich, structured prompt
-      → generate_explanation() calls Gemini Flash
-      → returns user-facing explanation string
+Use Case 1: SHAP-only explanation.
+Refactored to use shared/depression_model.py and shared/llm_client.py.
 """
 
-import google.generativeai as genai
+import sys
 import os
-from depression_model import SHAPResult, LABEL_MAP, LABEL_DESCRIPTIONS
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-# ── Gemini config ───────────────────────────────────────────────────
-GEMINI_MODEL = "gemini-3-flash-preview"   # matches your notebook
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+from shared.depression_model import SHAPResult, LABEL_MAP, LABEL_DESCRIPTIONS
+from shared.llm_client       import call_gemini
 
 SYSTEM_PROMPT = (
     "You are an empathetic, non-diagnostic mental health support assistant. "
-    "You help users understand AI-generated assessments of depression risk in "
-    "clear, warm, plain language. Never diagnose. Always recommend professional help."
+    "You help users understand AI-generated depression assessments using "
+    "SHAP token-level explanations. Speak warmly and in plain language. "
+    "Never diagnose. Always recommend professional support."
 )
 
+CLINICAL_TOKEN_NOTES = {
+    "hopeless":    "strongly linked to depressive hopelessness",
+    "empty":       "indicates emotional numbness, a hallmark of depression",
+    "tired":       "persistent fatigue is a core depression symptom",
+    "worthless":   "feelings of worthlessness are a key clinical indicator",
+    "nothing":     "anhedonia and nihilism pattern",
+    "anymore":     "implies loss of a previous positive state",
+    "death":       "may indicate passive suicidal ideation",
+    "suicide":     "requires immediate clinical attention",
+    "sad":         "direct expression of low mood",
+    "lonely":      "social withdrawal and isolation signal",
+    "numb":        "emotional blunting associated with depression",
+    "concentrate": "concentration difficulty is a cognitive depression symptom",
+    "appetite":    "appetite change is a somatic depression symptom",
+}
 
-def _init_gemini():
-    """Configure Gemini client. Key is read from env GOOGLE_API_KEY."""
-    key = os.environ.get("GOOGLE_API_KEY", GOOGLE_API_KEY)
-    if not key:
-        raise RuntimeError(
-            "GOOGLE_API_KEY environment variable not set.\n"
-            "Set it with: export GOOGLE_API_KEY='your_key'"
-        )
-    genai.configure(api_key=key)
-    return genai.GenerativeModel(GEMINI_MODEL)
 
-
-# ── Prompt builder ──────────────────────────────────────────────────
-def build_shap_prompt(
-    user_query: str,
-    shap_result: SHAPResult,
-) -> str:
-    """
-    Constructs the detailed prompt combining:
-      - User's original message
-      - Model prediction + probabilities
-      - SHAP token contributions (risk + protective)
-      - Clinical notes for flagged tokens
-    
-    Mirrors notebook cell [29] but with richer structure.
-    """
-
-    # ── Probability block ───────────────────────────────────────────
+def build_shap_prompt(user_query: str, result: SHAPResult) -> str:
+    # Probability block
     prob_lines = []
     for i, label in LABEL_MAP.items():
-        bar  = "█" * int(shap_result.pred_probs[i] * 20)
-        prob_lines.append(
-            f"  {label:<18s} {bar:<20s} {shap_result.pred_probs[i]*100:.1f}%"
-        )
+        bar = "█" * int(result.pred_probs[i] * 20)
+        prob_lines.append(f"  {label:<18s} {bar:<20s} {result.pred_probs[i]*100:.1f}%")
     prob_block = "\n".join(prob_lines)
 
-    # ── Risk tokens block ───────────────────────────────────────────
+    # Risk tokens
     risk_lines = []
-    for t in shap_result.risk_tokens:
-        note = f"  ← {t['note']}" if t["note"] else ""
-        risk_lines.append(
-            f"  '{t['token']}' (SHAP={t['shap']:+.4f}){note}"
-        )
-    risk_block = "\n".join(risk_lines) if risk_lines else "  None detected"
+    for t in result.risk_tokens:
+        note = f"  <- {t['note']}" if t["note"] else ""
+        risk_lines.append(f"  '{t['token']}' (SHAP={t['shap']:+.4f}){note}")
+    risk_block  = "\n".join(risk_lines) if risk_lines else "  None detected"
 
-    # ── Protective tokens block ─────────────────────────────────────
-    prot_lines = []
-    for t in shap_result.protective_tokens:
-        prot_lines.append(
-            f"  '{t['token']}' (SHAP={t['shap']:+.4f})"
-        )
-    prot_block = "\n".join(prot_lines) if prot_lines else "  None detected"
+    # Protective tokens
+    prot_lines  = [f"  '{t['token']}' (SHAP={t['shap']:+.4f})" for t in result.protective_tokens]
+    prot_block  = "\n".join(prot_lines) if prot_lines else "  None detected"
 
-    # ── Label meaning ───────────────────────────────────────────────
-    label_meaning = LABEL_DESCRIPTIONS.get(shap_result.pred_label, "")
+    label_meaning = LABEL_DESCRIPTIONS.get(result.pred_label, "")
 
-    prompt = f"""You are an empathetic explainer for an automatic depression screening tool.
+    return f"""You are explaining an AI depression screening result to a user.
 
 ─────────────────────────────────────────────────
-USER'S ORIGINAL MESSAGE:
+USER'S MESSAGE:
 "{user_query}"
 
 ─────────────────────────────────────────────────
 MODEL PREDICTION:
-  Result     : {shap_result.pred_label.upper()}
-  Meaning    : {label_meaning}
+  Result  : {result.pred_label.upper()}
+  Meaning : {label_meaning}
 
 Probability distribution:
 {prob_block}
 
 ─────────────────────────────────────────────────
 SHAP TOKEN ANALYSIS:
-SHAP (SHapley Additive exPlanations) measures exactly which words in the
-text drove the model's prediction. Positive = pushes toward depression.
+SHAP measures which words drove the prediction. Positive = pushes toward depression.
 
 Words that INCREASED the depression signal:
 {risk_block}
@@ -109,64 +84,31 @@ Words that REDUCED the depression signal:
 ─────────────────────────────────────────────────
 YOUR TASK — write a response that:
 
-1. ACKNOWLEDGE the user's message warmly and without judgment.
+1. ACKNOWLEDGE the user's message warmly.
+2. EXPLAIN the prediction: state the level and mention 2-3 specific words
+   from the text that influenced it and why they matter clinically.
+3. SUGGEST 2-3 concrete, tailored self-care actions based on the risk words.
+4. CLOSE with an empathetic reminder this is an AI assessment, not a diagnosis,
+   and encourage professional help. Add a crisis line reminder if level is 'severe'.
 
-2. EXPLAIN the prediction in plain language:
-   - State the predicted level ({shap_result.pred_label}) and what it means
-   - Mention 2–3 specific words from the text that influenced the prediction
-     and WHY they matter clinically (use the notes above)
-   - If protective words exist, point them out as positives
-
-3. SUGGEST 2–3 concrete, evidence-based self-care actions tailored to
-   the specific risk words identified (e.g., if 'tired' is flagged, suggest
-   sleep hygiene; if 'lonely' is flagged, suggest social connection).
-
-4. CLOSE with:
-   - An empathetic reminder that this is an AI tool, NOT a clinical diagnosis
-   - A gentle but clear encouragement to speak with a mental health professional
-   - If the prediction is 'severe', add a crisis line reminder
-
-Tone: warm, non-clinical, empowering. Length: 250–400 words.
-Avoid bullet points in the opening paragraph.
+Tone: warm, non-clinical, empowering. Length: 250-400 words.
 """
-    return prompt
 
 
-# ── LLM call ────────────────────────────────────────────────────────
-def generate_explanation(
-    user_query: str,
-    shap_result: SHAPResult,
-) -> str:
-    """
-    Calls Gemini with the SHAP-augmented prompt.
-    Returns the natural-language explanation string.
-    """
-    gemini = _init_gemini()
-    prompt = build_shap_prompt(user_query, shap_result)
-
-    response = gemini.generate_content(
-        contents=[
-            {
-                "role": "user",
-                "parts": [f"{SYSTEM_PROMPT}\n\nUser query: {prompt}"],
-            }
-        ]
-    )
-    return response.text.strip() if response.text else ""
+def generate_shap_explanation(user_query: str, result: SHAPResult) -> str:
+    """Calls Gemini with the SHAP-augmented prompt."""
+    return call_gemini(build_shap_prompt(user_query, result), system=SYSTEM_PROMPT)
 
 
-# ── Standalone test ─────────────────────────────────────────────────
 if __name__ == "__main__":
-    from depression_model import explain_with_shap, format_debug_summary
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from shared.depression_model import explain_with_shap, format_debug
 
     text  = "I feel empty and tired every day. Nothing makes sense anymore."
-    query = "I've been feeling really low lately. Can you help me understand what's happening?"
+    query = "Can you help me understand how I'm feeling?"
 
-    print("Running SHAP …")
     result = explain_with_shap(text)
-    print(format_debug_summary(result))
-
-    print("\nGenerating Gemini explanation …\n")
-    explanation = generate_explanation(user_query=query, shap_result=result)
-    print("── LLM Explanation ──────────────────────────────────────────")
-    print(explanation)
+    print(format_debug(result))
+    print("\n── SHAP Explanation ──────────────────────────────────────────")
+    print(generate_shap_explanation(query, result))

@@ -10,6 +10,8 @@ pandas
 numpy
 shap
 dice-ml
+sentence-transformers
+faiss-cpu
 
 # LLMs (offline option)
 transformers
@@ -20,4 +22,5 @@ llama-cpp-python
 # Utilities
 jsonschema>=4.21.1
 
+# telegram bot
 python-telegram-bot>=21.0
