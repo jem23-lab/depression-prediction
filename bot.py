@@ -4,14 +4,11 @@ bot.py  (root-level, shared by all use cases)
 Single Telegram bot that lets the user pick their explanation method
 and routes to the correct pipeline.
 
-Architecture:
-  conversation.py   → FSM: collect use-case choice + user text
-  ┌─────────────────────────────────────────┐
-  │ use_case == "1"  → SHAP pipeline        │
-  │ use_case == "2"  → RAG pipeline         │
-  │ use_case == "3"  → (hybrid, coming soon)│
-  └─────────────────────────────────────────┘
-  shared/llm_client.py  → Gemini (all routes)
+Use cases:
+  1 → SHAP explanation
+  2 → RAG explanation
+  4 → Counterfactual explanation
+  (3, 5 → coming soon)
 
 Run:
   export TELEGRAM_BOT_TOKEN="..."
@@ -32,26 +29,13 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# ── Path setup so shared/ and explainer subfolders are importable ────
+# ── Path setup ───────────────────────────────────────────────────────
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _ROOT)
 
-from shared.conversation   import process_message, reset_session
-from shared.llm_client     import strip_markdown
+from shared.conversation     import process_message
+from shared.llm_client       import strip_markdown
 from shared.depression_model import load as preload_model
-
-# ── Lazy imports for each use case (only loaded when needed) ─────────
-def _get_shap_pipeline():
-    from shared.depression_model   import explain_with_shap, format_debug
-    from architecture.shap_explainer.shap_explainer import generate_shap_explanation
-    return explain_with_shap, format_debug, generate_shap_explanation
-
-def _get_rag_pipeline():
-    from architecture.rag_explainer.rag_explainer import (
-        run_rag_pipeline, generate_rag_explanation, format_rag_debug
-    )
-    return run_rag_pipeline, generate_rag_explanation, format_rag_debug
-
 
 # ── Logging ──────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -61,43 +45,70 @@ logging.basicConfig(
 logger = logging.getLogger("depression_bot")
 
 
-# ── Safe Telegram send ───────────────────────────────────────────────
+# ── Lazy pipeline importers (avoid loading heavy libs at startup) ────
+def _get_shap_pipeline():
+    from shared.depression_model        import explain_with_shap, format_debug
+    from architecture.shap_explainer.shap_explainer  import generate_shap_explanation
+    return explain_with_shap, format_debug, generate_shap_explanation
+
+
+def _get_rag_pipeline():
+    from architecture.rag_explainer.rag_explainer import (
+        run_rag_pipeline, generate_rag_explanation, format_rag_debug,
+    )
+    return run_rag_pipeline, generate_rag_explanation, format_rag_debug
+
+
+def _get_cf_pipeline():
+    from architecture.shap_counterfactual_explainer.cf_generator import generate_counterfactuals, format_cf_debug
+    from architecture.shap_counterfactual_explainer.cf_explainer import (
+        generate_cf_explanation, format_cf_telegram_preview,
+    )
+    return generate_counterfactuals, format_cf_debug, generate_cf_explanation, format_cf_telegram_preview
+
+
+# ── Helpers ──────────────────────────────────────────────────────────
 async def safe_send(update: Update, text: str, chunk_size: int = 4000):
-    """Strip Markdown and chunk-send plain text to avoid parse errors."""
+    """Strip Markdown and send plain text, split into chunks if needed."""
     text = strip_markdown(text)
     for i in range(0, max(len(text), 1), chunk_size):
-        await update.message.reply_text(text[i : i + chunk_size])
+        await update.message.reply_text(text[i: i + chunk_size])
 
 
-# ── Handlers ─────────────────────────────────────────────────────────
+async def send_footer(update: Update):
+    await update.message.reply_text(
+        "─────────────────────────────\n"
+        "Type /assess to run another analysis.\n"
+        "Type /reset to clear your session."
+    )
+
+
+# ── Central message handler ──────────────────────────────────────────
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text    = (update.message.text or "").strip()
-    logger.info("User %s [%s]: %s", user_id, text[:60])
+    logger.info("User %s: %s", user_id, text[:80])
 
     result = process_message(user_id, text)
-
-    # Always send the FSM response first
     await safe_send(update, result["response"])
 
-    # When FSM signals ready → dispatch to the chosen pipeline
     if result["status"] == "ready" and result.get("user_text"):
         await dispatch_pipeline(update, user_id, result["use_case"], result["user_text"])
 
 
-async def dispatch_pipeline(
-    update: Update, user_id: int, use_case: str, user_text: str
-):
-    """Route to the correct explainer pipeline based on use_case."""
+async def dispatch_pipeline(update: Update, user_id: int, use_case: str, user_text: str):
+    """Route to the correct use-case pipeline."""
     try:
         if use_case == "1":
             await run_shap_pipeline(update, user_id, user_text)
         elif use_case == "2":
             await run_rag_pipeline(update, user_id, user_text)
+        elif use_case == "4":
+            await run_cf_pipeline(update, user_id, user_text)
         else:
             await update.message.reply_text(
-                f"Use case {use_case} is not yet implemented. "
-                "Try /assess and choose 1 or 2."
+                f"Use case {use_case} is not yet implemented.\n"
+                "Please choose 1, 2, or 4 from the /assess menu."
             )
     except Exception as exc:
         logger.exception("Pipeline error (UC%s) for user %s: %s", use_case, user_id, exc)
@@ -119,7 +130,6 @@ async def run_shap_pipeline(update: Update, user_id: int, user_text: str):
     confidence = shap_result.pred_probs[shap_result.pred_label_idx]
     top_word   = shap_result.top_tokens[0]["token"] if shap_result.top_tokens else "—"
 
-    # Preview
     await update.message.reply_text(
         f"🔬 Initial result (SHAP)\n"
         f"  Level      : {label}\n"
@@ -128,13 +138,11 @@ async def run_shap_pipeline(update: Update, user_id: int, user_text: str):
         "Generating full explanation..."
     )
 
-    # LLM explanation
     explanation = generate_shap_explanation(user_text, shap_result)
-    await safe_send(update, "📊 Your Assessment (SHAP)\n" + "─"*35 + "\n\n" + explanation)
+    await safe_send(update, "Your Assessment (SHAP)\n" + "-"*35 + "\n\n" + explanation)
 
-    # Token breakdown
     if shap_result.top_tokens:
-        lines = ["🔍 SHAP Token Breakdown", "Words that influenced the prediction:\n"]
+        lines = ["SHAP Token Breakdown", "Words that influenced the prediction:\n"]
         for t in shap_result.top_tokens[:6]:
             arrow = "🔴" if t["shap"] > 0 else "🟢"
             line  = f"  {arrow} '{t['token']}'  SHAP={t['shap']:+.4f}  {t['direction']}"
@@ -143,7 +151,7 @@ async def run_shap_pipeline(update: Update, user_id: int, user_text: str):
             lines.append(line)
         await update.message.reply_text("\n".join(lines))
 
-    await _send_footer(update)
+    await send_footer(update)
 
 
 # ── Use Case 2: RAG ──────────────────────────────────────────────────
@@ -158,7 +166,6 @@ async def run_rag_pipeline(update: Update, user_id: int, user_text: str):
     confidence = rag_result.pred_probs[rag_result.pred_label_idx]
     symptoms   = ", ".join(d.symptom_name for d in rag_result.retrieved_docs)
 
-    # Preview
     await update.message.reply_text(
         f"📚 Initial result (RAG)\n"
         f"  Level           : {label}\n"
@@ -167,12 +174,10 @@ async def run_rag_pipeline(update: Update, user_id: int, user_text: str):
         "Generating full explanation..."
     )
 
-    # LLM explanation
     explanation = generate_rag_explanation(user_text, rag_result)
-    await safe_send(update, "📊 Your Assessment (RAG)\n" + "─"*35 + "\n\n" + explanation)
+    await safe_send(update, "Your Assessment (RAG)\n" + "-"*35 + "\n\n" + explanation)
 
-    # Retrieved symptom breakdown
-    lines = ["📖 Retrieved Clinical Knowledge", "Symptoms matched to your message:\n"]
+    lines = ["Retrieved Clinical Knowledge", "Symptoms matched to your message:\n"]
     for i, doc in enumerate(rag_result.retrieved_docs, 1):
         lines.append(
             f"  {i}. {doc.symptom_name} ({doc.symptom_type})\n"
@@ -180,15 +185,39 @@ async def run_rag_pipeline(update: Update, user_id: int, user_text: str):
         )
     await update.message.reply_text("\n".join(lines))
 
-    await _send_footer(update)
+    await send_footer(update)
 
 
-async def _send_footer(update: Update):
+# ── Use Case 4: Counterfactual ───────────────────────────────────────
+async def run_cf_pipeline(update: Update, user_id: int, user_text: str):
+    generate_counterfactuals, format_cf_debug, generate_cf_explanation, format_cf_preview = _get_cf_pipeline()
+
+    logger.info("Running Counterfactual pipeline for user %s", user_id)
     await update.message.reply_text(
-        "─────────────────────────────\n"
-        "Type /assess to run another analysis.\n"
-        "Type /reset to clear your session."
+        "Generating counterfactuals — this involves SHAP + multiple LLM calls.\n"
+        "This may take 20-40 seconds..."
     )
+
+    result = generate_counterfactuals(user_text, n_candidates=3, n_attempts=2)
+    logger.info(format_cf_debug(result))
+
+    await update.message.reply_text(format_cf_preview(result))
+
+    explanation = generate_cf_explanation(user_text, result)
+    await safe_send(update, "Your Counterfactual Assessment\n" + "-"*35 + "\n\n" + explanation)
+
+    if result.candidates:
+        lines = ["Counterfactual Candidates", "Ranked by flip success + minimality:\n"]
+        for i, c in enumerate(result.candidates[:3], 1):
+            status = "FLIP" if c["flip_success"] else "no flip"
+            lines.append(
+                f"  {i}. [{status}] Predicted: {c['label']}\n"
+                f"     Minimality: {c['minimality']:.2f}  Meaning kept: {c['semantic_sim']:.2f}\n"
+                f"     \"{c['text'][:110]}\""
+            )
+        await update.message.reply_text("\n".join(lines))
+
+    await send_footer(update)
 
 
 # ── Entry point ──────────────────────────────────────────────────────
@@ -199,10 +228,9 @@ def main():
     if not os.environ.get("GOOGLE_API_KEY"):
         raise RuntimeError("GOOGLE_API_KEY is not set.")
 
-    # Pre-load the shared depression model at startup
-    logger.info("Pre-loading depression model + SHAP explainer…")
+    logger.info("Pre-loading depression model + SHAP explainer...")
     preload_model()
-    logger.info("Model ready. Bot starting…")
+    logger.info("Model ready. Bot starting...")
 
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start",  handle_message))

@@ -70,10 +70,40 @@ def test_uc2(text: str):
     print("="*65)
 
 
+def test_uc4(text: str):
+    from counterfactual_explainer.cf_generator import generate_counterfactuals, format_cf_debug
+    from counterfactual_explainer.cf_explainer import generate_cf_explanation, build_cf_explanation_prompt
+
+    print("\n" + "="*65)
+    print("  USE CASE 4 — COUNTERFACTUAL EXPLANATION")
+    print("  Research: FIZLE (2024) + FitCF CGG (2024) + Wachter et al. (2017)")
+    print("="*65)
+    print(f"\nText: {text}\n")
+
+    print("Step 1: SHAP analysis + counterfactual generation...")
+    result = generate_counterfactuals(text, n_candidates=3, n_attempts=2)
+    print(format_cf_debug(result))
+
+    print("\n── Candidate Details ────────────────────────────────────────")
+    for i, c in enumerate(result.candidates, 1):
+        status = "FLIP" if c["flip_success"] else "no flip"
+        print(f"  {i}. [{status}] [{c['label']}]")
+        print(f"     Text       : {c['text']}")
+        print(f"     Minimality : {c['minimality']:.3f}  Meaning kept: {c['semantic_sim']:.3f}  Score: {c['score']:.4f}")
+
+    flip_rate = sum(1 for c in result.candidates if c["flip_success"]) / max(len(result.candidates), 1)
+    print(f"\n  Flip rate: {flip_rate*100:.1f}%  ({sum(1 for c in result.candidates if c['flip_success'])}/{len(result.candidates)} candidates)")
+
+    print("\n── Gemini CF Explanation ────────────────────────────────────")
+    explanation = generate_cf_explanation(text, result)
+    print(explanation)
+    print("="*65)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--uc",       choices=["1", "2"], default="1",
-                        help="Use case: 1=SHAP, 2=RAG")
+    parser.add_argument("--uc",       choices=["1", "2", "4"], default="1",
+                        help="Use case: 1=SHAP, 2=RAG, 4=Counterfactual")
     parser.add_argument("--scenario", choices=list(SCENARIOS.keys()),
                         default="indirect")
     parser.add_argument("--text",     type=str, default=None,
@@ -84,5 +114,7 @@ if __name__ == "__main__":
 
     if args.uc == "1":
         test_uc1(text)
-    else:
+    elif args.uc == "2":
         test_uc2(text)
+    elif args.uc == "4":
+        test_uc4(text)

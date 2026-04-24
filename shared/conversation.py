@@ -40,9 +40,9 @@ USE_CASES = {
     },
     "4": {
         "name":        "Counterfactual",
-        "description": "Shows what you could change in your message to shift the prediction.",
+        "description": "Shows what minimal change in your message would shift the AI prediction — and what that means for you.",
         "emoji":       "🔄",
-        "status":      "coming soon",
+        "status":      "available",
     },
     "5": {
         "name":        "MCP Agent",

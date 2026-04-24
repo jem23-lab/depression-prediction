@@ -23,7 +23,7 @@ explainableDepressionPrediction/
 │   └── rag_explainer.py            ← RAG pipeline + prompt builder
 │
 ├── hybrid_shap_rag/                ← Use Case 3 (coming soon)
-├── counterfactual_explainer/       ← Use Case 4 (coming soon)
+├── counterfactual_explainer/       ← Use Case 4 
 └── mcp_modular_agent/              ← Use Case 5 (coming soon)
 ```
 
