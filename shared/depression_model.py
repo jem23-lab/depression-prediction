@@ -6,10 +6,18 @@ Shared model wrapper used by ALL use cases (SHAP, RAG, hybrid, etc.)
 Model : rafalposwiata/deproberta-large-depression
 Labels: 0=severe, 1=moderate, 2=not depression
 
+CALIBRATED SEVERITY :
+  The model outputs soft probabilities [severe, moderate, not_depression].
+  Simple argmax misses clinically important cases where severe probability
+  is high but not the top class (e.g. 30% severe / 62% moderate still
+  warrants a severe-level response). We use a weighted severity score
+  and a severity_prob threshold to catch these cases.
+
 Exposes:
-    predict_proba(texts)     → np.ndarray (n, 3)
-    reframe_text(text)       → str (expands indirect phrasing)
-    explain_with_shap(text)  → SHAPResult
+    predict_proba(texts)        → np.ndarray (n, 3)
+    classify_severity(probs)    → (label, severity_score, reason)
+    explain_with_shap(text)     → SHAPResult
+    SUICIDAL_IDEATION_PATTERNS  → for crisis detection in bot.py
 """
 
 import re
@@ -17,10 +25,10 @@ import numpy as np
 import torch
 import shap
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Tuple
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-# ── Config ──────────────────────────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────
 MODEL_NAME = "rafalposwiata/deproberta-large-depression"
 DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -32,66 +40,108 @@ LABEL_DESCRIPTIONS = {
     "not depression": "No significant depression signals detected at this time.",
 }
 
-CLINICAL_TOKEN_NOTES = {
-    "hopeless":   "strongly linked to depressive hopelessness",
-    "empty":      "indicates emotional numbness, a hallmark of depression",
-    "tired":      "persistent fatigue is a core depression symptom",
-    "worthless":  "feelings of worthlessness are a key clinical indicator",
-    "nothing":    "anhedonia and nihilism pattern",
-    "anymore":    "implies loss of a previous positive state",
-    "death":      "may indicate passive suicidal ideation",
-    "suicide":    "requires immediate clinical attention",
-    "sad":        "direct expression of low mood",
-    "lonely":     "social withdrawal and isolation signal",
-    "cry":        "frequent crying is a depression marker",
-    "sleep":      "sleep disturbance is a core symptom",
-    "numb":       "emotional blunting associated with depression",
-    "concentrate": "concentration difficulty is a cognitive depression symptom",
-    "appetite":   "appetite change is a somatic depression symptom",
-    "worthless":  "low self-worth is a key affective symptom",
-}
+# ── Calibrated severity thresholds ────────────────────────────────────
+# If severe probability exceeds this even when not the top class → escalate to severe
+SEVERE_ESCALATION_THRESHOLD = 0.30
+# Weighted score weights: severe=1.0, moderate=0.5, not_depression=0.0
+SEVERITY_WEIGHTS = [1.0, 0.5, 0.0]
 
-# ── Clinical reframing (indirect → explicit clinical language) ──────
-INDIRECT_TO_CLINICAL = [
-    (r"don'?t (?:really )?go out",              "I have lost interest in going out and socializing"),
-    (r"don'?t (?:really )?leave (?:the )?house","I feel too low to leave the house"),
-    (r"lost interest in (?:my )?hobbie?s?",     "I no longer enjoy my hobbies, I feel anhedonia"),
-    (r"don'?t enjoy (?:things|anything)",       "I feel no pleasure in things I used to enjoy"),
-    (r"can'?t be bothered",                     "I feel too fatigued and unmotivated to do anything"),
-    (r"don'?t (?:really )?see (?:my )?friends", "I have withdrawn from social contact"),
-    (r"hard(?:er)? to concentrate",             "I am struggling to concentrate, cognitive symptom of depression"),
-    (r"can'?t (?:focus|concentrate)",           "I cannot concentrate, a symptom of depression"),
-    (r"find it hard to (?:focus|think)",        "I experience difficulty thinking clearly"),
-    (r"brain (?:fog|feels? slow)",              "I have brain fog and cognitive slowing"),
-    (r"can'?t sleep",                           "I have insomnia and sleep disturbance"),
-    (r"sleep(?:ing)? too much",                 "I am sleeping excessively, hypersomnia"),
-    (r"tired all the time",                     "I feel persistent fatigue every day"),
-    (r"always tired",                           "I feel chronic fatigue and low energy"),
-    (r"no energy",                              "I have no energy, persistent fatigue"),
-    (r"don'?t feel (?:like )?myself",           "I feel like I have lost my sense of self"),
-    (r"feel(?:ing)? (?:a bit |pretty )?(?:low|down|flat)", "I feel persistent low mood"),
-    (r"feel(?:ing)? (?:really )?sad",           "I feel deep sadness"),
-    (r"feel(?:ing)? numb",                      "I feel emotionally numb and empty"),
-    (r"don'?t (?:really )?care anymore",        "I feel apathy and loss of motivation"),
-    (r"not (?:really )?eating",                 "I have lost my appetite"),
-    (r"(?:barely|hardly) eat(?:ing)?",          "I have significant appetite loss"),
-    (r"feel(?:ing)? (?:like a )?failure",       "I feel worthless and like a failure"),
-    (r"what'?s the point",                      "I feel hopeless and see no purpose"),
-    (r"don'?t see the point",                   "I feel hopeless and without purpose"),
-    (r"nothing matters",                        "I feel hopeless, nothing matters to me"),
+# ── Crisis / suicidal ideation patterns (used by bot.py) ─────────────
+# These patterns detect when the bot must show crisis resources FIRST.
+# We keep detection here so it stays in sync with the model wrapper.
+SUICIDAL_IDEATION_PATTERNS = [
+    r"fall asleep forever",
+    r"sleep forever",
+    r"never wake up",
+    r"don'?t want to (?:be here|exist|live|wake up|go on)",
+    r"want(?:ing)? to disappear",
+    r"end(?:ing)? it (?:all|myself)",
+    r"no reason to (?:live|go on|continue|exist)",
+    r"better off (?:dead|without me|gone)",
+    r"can'?t (?:go on|take it anymore|do this anymore)",
+    r"want(?:ing)? to (?:die|kill myself|end my life)",
+    r"thoughts? of (?:suicide|ending|death)",
+    r"(?:lost|losing) the will to (?:live|go on)",
 ]
 
 
-def reframe_text(text: str) -> str:
-    """Expands indirect phrasing into explicit clinical language."""
-    parts = []
-    for pattern, phrase in INDIRECT_TO_CLINICAL:
-        if re.search(pattern, text.lower()):
-            parts.append(phrase)
-    return ". ".join(parts) + ". " + text if parts else text
+def is_crisis_text(text: str) -> bool:
+    """Returns True if text contains suicidal ideation or crisis signals."""
+    tl = text.lower()
+    return any(re.search(p, tl) for p in SUICIDAL_IDEATION_PATTERNS)
 
 
-# ── Singletons ───────────────────────────────────────────────────────
+# ── Calibrated severity classifier ────────────────────────────────────
+def classify_severity(probs: np.ndarray) -> Tuple[str, float, str]:
+    """
+    Returns (label, severity_score, reason) from raw model probabilities.
+
+    Addresses the problem where argmax gives "moderate" even when
+    severe probability is meaningfully high (e.g. 30% severe / 62% moderate).
+    A 30% severe probability is clinically significant and should not be
+    silently overridden by a 62% moderate prediction.
+
+    severity_score: 0.0 (none) → 1.0 (severe), continuous.
+    reason: human-readable string explaining the classification decision.
+    """
+    severe_prob   = float(probs[0])
+    moderate_prob = float(probs[1])
+    nodep_prob    = float(probs[2])
+
+    # Weighted severity score
+    score = (severe_prob * SEVERITY_WEIGHTS[0]
+             + moderate_prob * SEVERITY_WEIGHTS[1]
+             + nodep_prob * SEVERITY_WEIGHTS[2])
+
+    argmax_idx   = int(np.argmax(probs))
+    argmax_label = LABEL_MAP[argmax_idx]
+
+    # Escalate to severe if severe_prob is clinically meaningful
+    if severe_prob >= SEVERE_ESCALATION_THRESHOLD:
+        label  = "severe"
+        reason = (
+            f"Severe probability {severe_prob:.1%} >= escalation threshold "
+            f"{SEVERE_ESCALATION_THRESHOLD:.0%} — escalated from '{argmax_label}'"
+        )
+    else:
+        label  = argmax_label
+        reason = f"Argmax prediction (severe={severe_prob:.1%}, moderate={moderate_prob:.1%})"
+
+    return label, round(score, 4), reason
+
+
+# ── Token-level annotations for SHAP ─────────────────────────────────
+CLINICAL_TOKEN_NOTES = {
+    "hopeless":    "strongly linked to depressive hopelessness",
+    "hopelessness":"core depression symptom",
+    "empty":       "emotional numbness — a hallmark of depression",
+    "tired":       "persistent fatigue is a core depression symptom",
+    "exhausted":   "severe fatigue signal",
+    "worthless":   "key clinical indicator of low self-worth",
+    "nothing":     "anhedonia and nihilism pattern",
+    "anymore":     "implies loss of a previous positive state",
+    "forever":     "passive suicidal ideation — wanting to cease existing",
+    "death":       "may indicate passive suicidal ideation",
+    "die":         "active suicidal ideation — requires clinical attention",
+    "suicide":     "requires immediate clinical attention",
+    "disappear":   "passive suicidal ideation signal",
+    "burden":      "perceived burdensomeness — strong predictor of severe depression",
+    "sad":         "direct expression of low mood",
+    "lonely":      "social withdrawal and isolation signal",
+    "cry":         "frequent crying is a depression marker",
+    "sleep":       "sleep disturbance is a core symptom",
+    "numb":        "emotional blunting associated with depression",
+    "concentrate": "concentration difficulty — cognitive depression symptom",
+    "appetite":    "appetite change — somatic depression symptom",
+    "unbearable":  "severe subjective distress marker",
+    "bad":         "subjective suffering — intensity depends on context",
+    "worse":       "worsening trajectory — severity escalation signal",
+    "meaningless": "loss of meaning — existential symptom of depression",
+    "pointless":   "hopelessness and nihilism pattern",
+}
+
+
+# ── Singletons ────────────────────────────────────────────────────────
 _tokenizer = None
 _model     = None
 _explainer = None
@@ -117,7 +167,10 @@ def load():
 
 
 def predict_proba(texts: List[str]) -> np.ndarray:
-    """Returns softmax probs shape (n, 3): [severe, moderate, not_depression]"""
+    """
+    Returns raw softmax probabilities shape (n, 3): [severe, moderate, not_depression].
+    The USER'S TEXT is passed directly — no reframing.
+    """
     load()
     with torch.no_grad():
         enc    = _tokenizer(texts, padding=True, truncation=True,
@@ -127,43 +180,51 @@ def predict_proba(texts: List[str]) -> np.ndarray:
     return probs
 
 
+# ── SHAP result dataclass ─────────────────────────────────────────────
 @dataclass
 class SHAPResult:
-    text:              str
-    model_input:       str
+    text:              str           # original user text, unchanged
     tokens:            List[str]
     shap_matrix:       np.ndarray
-    pred_label_idx:    int
-    pred_label:        str
+    pred_label_idx:    int           # argmax index (0/1/2)
+    pred_label:        str           # calibrated label (may differ from argmax)
     pred_probs:        np.ndarray
-    was_reframed:      bool          = False
-    top_tokens:        List[dict]    = field(default_factory=list)
-    risk_tokens:       List[dict]    = field(default_factory=list)
-    protective_tokens: List[dict]    = field(default_factory=list)
+    severity_score:    float = 0.0   # continuous 0.0–1.0
+    severity_reason:   str   = ""    # why this label was chosen
+    top_tokens:        List[dict] = field(default_factory=list)
+    risk_tokens:       List[dict] = field(default_factory=list)
+    protective_tokens: List[dict] = field(default_factory=list)
 
 
 def explain_with_shap(text: str, top_n: int = 8) -> SHAPResult:
-    """Run SHAP token-level explanation. Reframes indirect text first."""
+    """
+    Runs SHAP token-level explanation on the RAW user text.
+    No reframing — SHAP explains exactly what the user wrote.
+    Calibrated severity is applied to the raw probabilities.
+    """
     load()
-    model_input  = reframe_text(text)
-    was_reframed = model_input != text
 
-    shap_vals   = _explainer([model_input])
-    explanation  = shap_vals[0]
-    tokens       = list(explanation.data)
-    shap_matrix  = explanation.values
+    # SHAP on raw text
+    shap_vals   = _explainer([text])
+    explanation = shap_vals[0]
+    tokens      = list(explanation.data)
+    shap_matrix = explanation.values
 
-    pred_probs     = predict_proba([model_input])[0]
-    pred_label_idx = int(np.argmax(pred_probs))
-    pred_label     = LABEL_MAP[pred_label_idx]
-    pred_col_shap  = shap_matrix[:, pred_label_idx]
+    # Raw probabilities → calibrated label
+    pred_probs                 = predict_proba([text])[0]
+    pred_label, score, reason  = classify_severity(pred_probs)
+    pred_label_idx             = int(np.argmax(pred_probs))  # for SHAP column selection
+
+    # SHAP values for the argmax column (the model's strongest signal)
+    pred_col_shap = shap_matrix[:, pred_label_idx]
 
     records = []
     for tok, sv in zip(tokens, pred_col_shap):
         clean = tok.strip()
         if not clean or clean in ("", "▁"):
             continue
-        note = CLINICAL_TOKEN_NOTES.get(clean.lower().strip(".,!?'\""), "")
+        key  = clean.lower().strip(".,!?'\"")
+        note = CLINICAL_TOKEN_NOTES.get(key, "")
         records.append({
             "token":     clean,
             "shap":      float(sv),
@@ -174,18 +235,28 @@ def explain_with_shap(text: str, top_n: int = 8) -> SHAPResult:
     records.sort(key=lambda x: x["abs_shap"], reverse=True)
 
     return SHAPResult(
-        text=text, model_input=model_input, was_reframed=was_reframed,
-        tokens=tokens, shap_matrix=shap_matrix,
-        pred_label_idx=pred_label_idx, pred_label=pred_label, pred_probs=pred_probs,
-        top_tokens=records[:top_n],
-        risk_tokens=[r for r in records if r["shap"] > 0][:5],
-        protective_tokens=[r for r in records if r["shap"] < 0][:3],
+        text              = text,
+        tokens            = tokens,
+        shap_matrix       = shap_matrix,
+        pred_label_idx    = pred_label_idx,
+        pred_label        = pred_label,
+        pred_probs        = pred_probs,
+        severity_score    = score,
+        severity_reason   = reason,
+        top_tokens        = records[:top_n],
+        risk_tokens       = [r for r in records if r["shap"] > 0][:5],
+        protective_tokens = [r for r in records if r["shap"] < 0][:3],
     )
 
 
 def format_debug(result: SHAPResult) -> str:
     probs = ", ".join(f"{LABEL_MAP[i]}={result.pred_probs[i]:.3f}" for i in range(3))
-    lines = [f"Prediction: {result.pred_label} ({probs})", "Top tokens:"]
+    lines = [
+        f"Prediction : {result.pred_label} (score={result.severity_score:.3f})",
+        f"Raw probs  : {probs}",
+        f"Reason     : {result.severity_reason}",
+        "Top tokens :",
+    ]
     for t in result.top_tokens[:5]:
         lines.append(f"  '{t['token']}' SHAP={t['shap']:+.4f}  {t['direction']}")
     return "\n".join(lines)
