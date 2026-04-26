@@ -33,10 +33,10 @@ USE_CASES = {
         "status":      "available",
     },
     "3": {
-        "name":        "SHAP + RAG Combined",
-        "description": "Combines both SHAP token analysis and clinical knowledge retrieval.",
+        "name":        "SHAP + RAG + Counterfactual (Hybrid)",
+        "description": "Combines token-level SHAP, clinical knowledge retrieval, and counterfactual reasoning into one unified explanation.",
         "emoji":       "🔀",
-        "status":      "coming soon",
+        "status":      "available",
     },
     "4": {
         "name":        "Counterfactual",
@@ -135,9 +135,11 @@ def process_message(user_id: int, text: str) -> dict:
             )
         uc = USE_CASES[text]
         if uc["status"] != "available":
+            available_keys = [k for k, v in USE_CASES.items() if v["status"] == "available"]
             return _reply(
                 f"{uc['emoji']} {uc['name']} is coming soon.\n\n"
-                "Please choose an available option (1 or 2).",
+                f"Please choose an available option: {', '.join(available_keys)}.\n\n"
+                + build_menu_text(),
                 status="choosing",
             )
         session.use_case = text

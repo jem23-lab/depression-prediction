@@ -1,14 +1,14 @@
 """
 bot.py  (root-level, shared by all use cases)
 ────────────────────────────────────────────────────────────────────
-Single Telegram bot that lets the user pick their explanation method
-and routes to the correct pipeline.
+Single Telegram bot routing to all explanation pipelines.
 
 Use cases:
-  1 → SHAP explanation
-  2 → RAG explanation
-  4 → Counterfactual explanation
-  (3, 5 → coming soon)
+  1 → SHAP only
+  2 → RAG only
+  3 → Hybrid: SHAP + RAG + Counterfactual  (all three signals → one prompt)
+  4 → Counterfactual only
+  (5 → MCP agent, coming soon)
 
 Run:
   export TELEGRAM_BOT_TOKEN="..."
@@ -45,10 +45,10 @@ logging.basicConfig(
 logger = logging.getLogger("depression_bot")
 
 
-# ── Lazy pipeline importers (avoid loading heavy libs at startup) ────
+# ── Lazy pipeline importers ──────────────────────────────────────────
 def _get_shap_pipeline():
-    from shared.depression_model        import explain_with_shap, format_debug
-    from architecture.shap_explainer.shap_explainer  import generate_shap_explanation
+    from shared.depression_model       import explain_with_shap, format_debug
+    from architecture.shap_explainer.shap_explainer import generate_shap_explanation
     return explain_with_shap, format_debug, generate_shap_explanation
 
 
@@ -67,9 +67,15 @@ def _get_cf_pipeline():
     return generate_counterfactuals, format_cf_debug, generate_cf_explanation, format_cf_telegram_preview
 
 
+def _get_hybrid_pipeline():
+    from architecture.hybrid_shap_rag_counterfactual.hybrid_pipeline  import run_hybrid_pipeline, format_hybrid_debug, format_hybrid_telegram_preview
+    from architecture.hybrid_shap_rag_counterfactual.hybrid_explainer import generate_hybrid_explanation
+    return run_hybrid_pipeline, format_hybrid_debug, format_hybrid_telegram_preview, generate_hybrid_explanation
+
+
 # ── Helpers ──────────────────────────────────────────────────────────
 async def safe_send(update: Update, text: str, chunk_size: int = 4000):
-    """Strip Markdown and send plain text, split into chunks if needed."""
+    """Strip Markdown symbols and chunk-send as plain text."""
     text = strip_markdown(text)
     for i in range(0, max(len(text), 1), chunk_size):
         await update.message.reply_text(text[i: i + chunk_size])
@@ -103,12 +109,14 @@ async def dispatch_pipeline(update: Update, user_id: int, use_case: str, user_te
             await run_shap_pipeline(update, user_id, user_text)
         elif use_case == "2":
             await run_rag_pipeline(update, user_id, user_text)
+        elif use_case == "3":
+            await run_hybrid_pipeline_handler(update, user_id, user_text)
         elif use_case == "4":
             await run_cf_pipeline(update, user_id, user_text)
         else:
             await update.message.reply_text(
                 f"Use case {use_case} is not yet implemented.\n"
-                "Please choose 1, 2, or 4 from the /assess menu."
+                "Please choose 1, 2, 3, or 4 from the /assess menu."
             )
     except Exception as exc:
         logger.exception("Pipeline error (UC%s) for user %s: %s", use_case, user_id, exc)
@@ -121,8 +129,8 @@ async def dispatch_pipeline(update: Update, user_id: int, use_case: str, user_te
 # ── Use Case 1: SHAP ─────────────────────────────────────────────────
 async def run_shap_pipeline(update: Update, user_id: int, user_text: str):
     explain_with_shap, format_debug, generate_shap_explanation = _get_shap_pipeline()
+    logger.info("UC1 SHAP for user %s", user_id)
 
-    logger.info("Running SHAP pipeline for user %s", user_id)
     shap_result = explain_with_shap(user_text)
     logger.info(format_debug(shap_result))
 
@@ -142,7 +150,7 @@ async def run_shap_pipeline(update: Update, user_id: int, user_text: str):
     await safe_send(update, "Your Assessment (SHAP)\n" + "-"*35 + "\n\n" + explanation)
 
     if shap_result.top_tokens:
-        lines = ["SHAP Token Breakdown", "Words that influenced the prediction:\n"]
+        lines = ["SHAP Token Breakdown\n"]
         for t in shap_result.top_tokens[:6]:
             arrow = "🔴" if t["shap"] > 0 else "🟢"
             line  = f"  {arrow} '{t['token']}'  SHAP={t['shap']:+.4f}  {t['direction']}"
@@ -157,14 +165,14 @@ async def run_shap_pipeline(update: Update, user_id: int, user_text: str):
 # ── Use Case 2: RAG ──────────────────────────────────────────────────
 async def run_rag_pipeline(update: Update, user_id: int, user_text: str):
     rag_pipeline, generate_rag_explanation, format_rag_debug = _get_rag_pipeline()
+    logger.info("UC2 RAG for user %s", user_id)
 
-    logger.info("Running RAG pipeline for user %s", user_id)
     rag_result = rag_pipeline(user_text)
     logger.info(format_rag_debug(rag_result))
 
-    label      = rag_result.pred_label
+    label     = rag_result.pred_label
     confidence = rag_result.pred_probs[rag_result.pred_label_idx]
-    symptoms   = ", ".join(d.symptom_name for d in rag_result.retrieved_docs)
+    symptoms  = ", ".join(d.symptom_name for d in rag_result.retrieved_docs)
 
     await update.message.reply_text(
         f"📚 Initial result (RAG)\n"
@@ -177,7 +185,7 @@ async def run_rag_pipeline(update: Update, user_id: int, user_text: str):
     explanation = generate_rag_explanation(user_text, rag_result)
     await safe_send(update, "Your Assessment (RAG)\n" + "-"*35 + "\n\n" + explanation)
 
-    lines = ["Retrieved Clinical Knowledge", "Symptoms matched to your message:\n"]
+    lines = ["Retrieved Clinical Knowledge\n"]
     for i, doc in enumerate(rag_result.retrieved_docs, 1):
         lines.append(
             f"  {i}. {doc.symptom_name} ({doc.symptom_type})\n"
@@ -188,13 +196,70 @@ async def run_rag_pipeline(update: Update, user_id: int, user_text: str):
     await send_footer(update)
 
 
+# ── Use Case 3: Hybrid (SHAP + RAG + CF) ────────────────────────────
+async def run_hybrid_pipeline_handler(update: Update, user_id: int, user_text: str):
+    run_hybrid, format_debug, format_preview, generate_explanation = _get_hybrid_pipeline()
+    logger.info("UC3 Hybrid for user %s", user_id)
+
+    await update.message.reply_text(
+        "Running all three XAI pipelines (SHAP + RAG + Counterfactual).\n"
+        "This is the most comprehensive analysis — please allow 30-60 seconds..."
+    )
+
+    result = run_hybrid(user_text)
+    logger.info(format_debug(result))
+
+    # Preview showing what all three found
+    await update.message.reply_text(format_preview(result))
+
+    # Single unified LLM explanation synthesising all three
+    explanation = generate_explanation(user_text, result)
+    await safe_send(update, "Your Hybrid Assessment (SHAP + RAG + Counterfactual)\n" + "-"*50 + "\n\n" + explanation)
+
+    # ── Detail breakdown: all three signals ──────────────────────────
+    detail_lines = ["Detailed Evidence from All Three Signals\n"]
+
+    # SHAP tokens
+    if result.shap_result and result.shap_result.top_tokens:
+        detail_lines.append("SHAP — Risk Tokens:")
+        for t in result.shap_result.top_tokens[:5]:
+            arrow = "🔴" if t["shap"] > 0 else "🟢"
+            detail_lines.append(f"  {arrow} '{t['token']}' SHAP={t['shap']:+.4f}  {t['direction']}")
+        detail_lines.append("")
+
+    # RAG symptoms
+    if result.rag_result and result.rag_result.retrieved_docs:
+        detail_lines.append("RAG — Matched PHQ-8 Symptoms:")
+        for i, doc in enumerate(result.rag_result.retrieved_docs, 1):
+            detail_lines.append(
+                f"  {i}. {doc.symptom_name} ({doc.symptom_type})\n"
+                f"     {doc.clinical_definition[:90]}..."
+            )
+        detail_lines.append("")
+
+    # CF candidates
+    if result.cf_result and result.cf_result.candidates:
+        detail_lines.append("Counterfactual — Candidates:")
+        for i, c in enumerate(result.cf_result.candidates[:3], 1):
+            status = "FLIP" if c["flip_success"] else "no flip"
+            detail_lines.append(
+                f"  {i}. [{status}] [{c['label']}] min={c['minimality']:.2f}\n"
+                f"     \"{c['text'][:100]}\""
+            )
+
+    if len(detail_lines) > 1:
+        await update.message.reply_text("\n".join(detail_lines))
+
+    await send_footer(update)
+
+
 # ── Use Case 4: Counterfactual ───────────────────────────────────────
 async def run_cf_pipeline(update: Update, user_id: int, user_text: str):
     generate_counterfactuals, format_cf_debug, generate_cf_explanation, format_cf_preview = _get_cf_pipeline()
+    logger.info("UC4 CF for user %s", user_id)
 
-    logger.info("Running Counterfactual pipeline for user %s", user_id)
     await update.message.reply_text(
-        "Generating counterfactuals — this involves SHAP + multiple LLM calls.\n"
+        "Generating counterfactuals (SHAP + multiple LLM calls).\n"
         "This may take 20-40 seconds..."
     )
 
@@ -207,7 +272,7 @@ async def run_cf_pipeline(update: Update, user_id: int, user_text: str):
     await safe_send(update, "Your Counterfactual Assessment\n" + "-"*35 + "\n\n" + explanation)
 
     if result.candidates:
-        lines = ["Counterfactual Candidates", "Ranked by flip success + minimality:\n"]
+        lines = ["Counterfactual Candidates\n"]
         for i, c in enumerate(result.candidates[:3], 1):
             status = "FLIP" if c["flip_success"] else "no flip"
             lines.append(
