@@ -8,6 +8,7 @@ Usage:
     python test_pipeline.py --uc 2 --scenario indirect
     python test_pipeline.py --uc 3 --scenario moderate      # HYBRID
     python test_pipeline.py --uc 4 --scenario severe
+    python test_pipeline.py --uc 5 --scenario moderate      # MCP modular router
     python test_pipeline.py --uc 3 --text "I feel empty and hopeless every day."
 """
 
@@ -30,8 +31,8 @@ SCENARIOS = {
 
 # ── UC1: SHAP ─────────────────────────────────────────────────────────
 def test_uc1(text: str):
-    from shared.depression_model       import explain_with_shap, format_debug
-    from shap_explainer.shap_explainer import generate_shap_explanation
+    from shared.depression_model import explain_with_shap, format_debug
+    from architecture.shap_explainer.shap_explainer import generate_shap_explanation
 
     print("\n" + "="*65)
     print("  USE CASE 1 — SHAP ONLY")
@@ -53,10 +54,10 @@ def test_uc1(text: str):
 
 # ── UC2: RAG ──────────────────────────────────────────────────────────
 def test_uc2(text: str):
-    from rag_explainer.rag_explainer import (
+    from architecture.rag_explainer.rag_explainer import (
         run_rag_pipeline, generate_rag_explanation, format_rag_debug,
     )
-    from rag_explainer.rag_retriever import format_retrieved_for_prompt
+    from architecture.rag_explainer.rag_retriever import format_retrieved_for_prompt
 
     print("\n" + "="*65)
     print("  USE CASE 2 — RAG ONLY")
@@ -76,9 +77,11 @@ def test_uc2(text: str):
 
 # ── UC3: HYBRID ───────────────────────────────────────────────────────
 def test_uc3(text: str):
-    from hybrid_shap_rag_cf.hybrid_pipeline  import run_hybrid_pipeline, format_hybrid_debug
-    from hybrid_shap_rag_cf.hybrid_explainer import generate_hybrid_explanation
-    from rag_explainer.rag_retriever         import format_retrieved_for_prompt
+    from architecture.hybrid_shap_rag_counterfactual.hybrid_pipeline import (
+        run_hybrid_pipeline, format_hybrid_debug,
+    )
+    from architecture.hybrid_shap_rag_counterfactual.hybrid_explainer import generate_hybrid_explanation
+    from architecture.rag_explainer.rag_retriever import format_retrieved_for_prompt
 
     print("\n" + "="*65)
     print("  USE CASE 3 — HYBRID: SHAP + RAG + COUNTERFACTUAL")
@@ -128,8 +131,8 @@ def test_uc3(text: str):
 
 # ── UC4: Counterfactual ───────────────────────────────────────────────
 def test_uc4(text: str):
-    from counterfactual_explainer.cf_generator import generate_counterfactuals, format_cf_debug
-    from counterfactual_explainer.cf_explainer import generate_cf_explanation
+    from architecture.shap_counterfactual_explainer.cf_generator import generate_counterfactuals, format_cf_debug
+    from architecture.shap_counterfactual_explainer.cf_explainer import generate_cf_explanation
 
     print("\n" + "="*65)
     print("  USE CASE 4 — COUNTERFACTUAL ONLY")
@@ -158,14 +161,57 @@ def test_uc4(text: str):
     print("="*65)
 
 
+# ── UC5: MCP modular router ─────────────────────────────────────────
+def test_uc5(text: str):
+    from architecture.mcp_modular_agent.mcp_client import run_mcp_pipeline
+
+    print("\n" + "="*65)
+    print("  USE CASE 5 — MCP MODULAR ROUTER")
+    print("  LLM ranks SHAP/RAG/Counterfactual, then uses fallback")
+    print("="*65)
+    print(f"\nText: {text}\n")
+
+    result = run_mcp_pipeline(text, fallback=True, top_k=2)
+
+    required = ["selected_server", "fallback_used", "prediction", "confidence", "explanation"]
+    missing = [k for k in required if k not in result]
+    if missing:
+        raise RuntimeError(f"UC5 result missing keys: {missing}")
+
+    print("\n── MCP Router Result ───────────────────────────────────────")
+    print(f"  Selected server : {result.get('selected_server')}")
+    print(f"  Fallback used   : {result.get('fallback_used')}")
+    print(f"  Prediction      : {result.get('prediction')}")
+    conf = result.get("confidence")
+    conf_txt = f"{conf*100:.1f}%" if isinstance(conf, (int, float)) else "N/A"
+    print(f"  Confidence      : {conf_txt}")
+
+    rationale = (result.get("rationale") or "").strip()
+    if rationale:
+        print("\n── Router Rationale ────────────────────────────────────────")
+        print(rationale)
+
+    print("\n── Explanation Preview ─────────────────────────────────────")
+    expl = (result.get("explanation") or "").strip()
+    print((expl[:1200] + "...") if len(expl) > 1200 else expl)
+
+    errs = result.get("errors") or []
+    if errs:
+        print("\n── Fallback Errors Encountered ─────────────────────────────")
+        for e in errs:
+            print(f"  - {e}")
+
+    print("="*65)
+
+
 # ── Entry point ───────────────────────────────────────────────────────
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test XAI depression pipelines (no Telegram)")
     parser.add_argument(
         "--uc",
-        choices=["1", "2", "3", "4"],
+        choices=["1", "2", "3", "4", "5"],
         default="3",
-        help="Use case: 1=SHAP, 2=RAG, 3=Hybrid (SHAP+RAG+CF), 4=Counterfactual",
+        help="Use case: 1=SHAP, 2=RAG, 3=Hybrid (SHAP+RAG+CF), 4=Counterfactual, 5=MCP router",
     )
     parser.add_argument(
         "--scenario",
@@ -183,5 +229,5 @@ if __name__ == "__main__":
 
     text = args.text or SCENARIOS[args.scenario]
 
-    dispatch = {"1": test_uc1, "2": test_uc2, "3": test_uc3, "4": test_uc4}
+    dispatch = {"1": test_uc1, "2": test_uc2, "3": test_uc3, "4": test_uc4, "5": test_uc5}
     dispatch[args.uc](text)

@@ -8,7 +8,7 @@ Use cases:
   2 → RAG only
   3 → Hybrid: SHAP + RAG + Counterfactual  (all three signals → one prompt)
   4 → Counterfactual only
-  (5 → MCP agent, coming soon)
+  5 → MCP agent
 
 Run:
   export TELEGRAM_BOT_TOKEN="..."
@@ -73,6 +73,11 @@ def _get_hybrid_pipeline():
     return run_hybrid_pipeline, format_hybrid_debug, format_hybrid_telegram_preview, generate_hybrid_explanation
 
 
+def _get_mcp_pipeline():
+    from architecture.mcp_modular_agent.mcp_client import run_mcp_pipeline
+    return run_mcp_pipeline
+
+
 # ── Helpers ──────────────────────────────────────────────────────────
 async def safe_send(update: Update, text: str, chunk_size: int = 4000):
     """Strip Markdown symbols and chunk-send as plain text."""
@@ -113,10 +118,12 @@ async def dispatch_pipeline(update: Update, user_id: int, use_case: str, user_te
             await run_hybrid_pipeline_handler(update, user_id, user_text)
         elif use_case == "4":
             await run_cf_pipeline(update, user_id, user_text)
+        elif use_case == "5":
+            await run_mcp_pipeline_handler(update, user_id, user_text)
         else:
             await update.message.reply_text(
                 f"Use case {use_case} is not yet implemented.\n"
-                "Please choose 1, 2, 3, or 4 from the /assess menu."
+                "Please choose 1, 2, 3, 4, or 5 from the /assess menu."
             )
     except Exception as exc:
         logger.exception("Pipeline error (UC%s) for user %s: %s", use_case, user_id, exc)
@@ -281,6 +288,54 @@ async def run_cf_pipeline(update: Update, user_id: int, user_text: str):
                 f"     \"{c['text'][:110]}\""
             )
         await update.message.reply_text("\n".join(lines))
+
+    await send_footer(update)
+
+
+# ── Use Case 5: MCP ─────────────────────────────────────────────────
+async def run_mcp_pipeline_handler(update: Update, user_id: int, user_text: str):
+    run_mcp_pipeline = _get_mcp_pipeline()
+    logger.info("UC5 MCP for user %s", user_id)
+
+    await update.message.reply_text(
+        "Running MCP modular pipeline.\n"
+        "This may take a few seconds..."
+    )
+
+    result = run_mcp_pipeline(user_text)
+
+    label = result.get("prediction", "unknown")
+    confidence = float(result.get("confidence", 0.0) or 0.0)
+    selected_server = result.get("selected_server", "n/a")
+    fallback_used = bool(result.get("fallback_used", False))
+    rationale = result.get("rationale", "")
+    explanation = result.get("explanation", "")
+    errors = result.get("errors", []) or []
+
+    await update.message.reply_text(
+        f"🧠 Initial result (MCP)\n"
+        f"  Level           : {label}\n"
+        f"  Confidence      : {confidence*100:.1f}%\n"
+        f"  Selected server : {selected_server}\n"
+        f"  Fallback used   : {'yes' if fallback_used else 'no'}\n\n"
+        "Generating full explanation..."
+    )
+
+    if explanation:
+        await safe_send(update, "Your Assessment (MCP)\n" + "-"*35 + "\n\n" + explanation)
+
+    detail_lines = ["MCP Decision Details\n"]
+    if rationale:
+        detail_lines.append(f"Rationale: {rationale}")
+
+    if errors:
+        detail_lines.append("")
+        detail_lines.append("Errors:")
+        for i, e in enumerate(errors, 1):
+            detail_lines.append(f"  {i}. {e}")
+
+    if len(detail_lines) > 1:
+        await update.message.reply_text("\n".join(detail_lines))
 
     await send_footer(update)
 

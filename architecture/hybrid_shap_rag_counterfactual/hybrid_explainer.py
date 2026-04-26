@@ -75,8 +75,6 @@ def build_hybrid_prompt(user_query: str, result: HybridResult) -> str:
             + "\n\n  Protective tokens (reduce depression signal):\n"
             + ("\n".join(prot_lines) if prot_lines else "    None")
         )
-        if sr.was_reframed:
-            shap_block += "\n  Note: indirect phrasing was detected and expanded before analysis."
     else:
         shap_block = f"  [SHAP unavailable: {result.shap_error}]"
 

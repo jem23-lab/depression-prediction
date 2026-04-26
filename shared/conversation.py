@@ -10,9 +10,11 @@ States:
   DONE      → text ready, pipeline can run
 
 Use cases available:
-  1 → SHAP-only explanation
-  2 → RAG-only explanation
-  (3, 4, 5 → coming soon)
+  1 -> SHAP-only explanation
+  2 -> RAG-only explanation
+  3 -> Hybrid explanation
+  4 -> Counterfactual explanation
+  5 -> MCP modular router explanation
 """
 
 from dataclasses import dataclass, field
@@ -48,7 +50,7 @@ USE_CASES = {
         "name":        "MCP Agent",
         "description": "Modular agent that routes to the best explainer for your query.",
         "emoji":       "🤖",
-        "status":      "coming soon",
+        "status":      "available",
     },
 }
 
