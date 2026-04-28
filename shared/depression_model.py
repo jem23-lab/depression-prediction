@@ -4,14 +4,15 @@ shared/depression_model.py
 Shared model wrapper used by ALL use cases (SHAP, RAG, hybrid, etc.)
 
 Model : rafalposwiata/deproberta-large-depression
-Labels: 0=severe, 1=moderate, 2=not depression
+Labels: resolved at load() from _model.config.id2label
 
 CALIBRATED SEVERITY :
-  The model outputs soft probabilities [severe, moderate, not_depression].
+  The model outputs soft probabilities for three classes.
   Simple argmax misses clinically important cases where severe probability
-  is high but not the top class (e.g. 30% severe / 62% moderate still
-  warrants a severe-level response). We use a weighted severity score
-  and a severity_prob threshold to catch these cases.
+  is meaningful but not the top class (e.g. 22% severe / 68% moderate still
+  warrants a severe-level response). We use a severity_prob threshold to
+  catch these cases, using the actual per-class index resolved from the
+  model's id2label at load time.
 
 Exposes:
     predict_proba(texts)        → np.ndarray (n, 3)
@@ -21,6 +22,7 @@ Exposes:
 """
 
 import re
+import logging
 import numpy as np
 import torch
 import shap
@@ -28,10 +30,14 @@ from dataclasses import dataclass, field
 from typing import List, Tuple
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
+logger = logging.getLogger(__name__)
+
 # ── Config ────────────────────────────────────────────────────────────
 MODEL_NAME = "rafalposwiata/deproberta-large-depression"
 DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
 
+# Canonical label map assumed from the model card.
+# load() validates this against _model.config.id2label and corrects if needed.
 LABEL_MAP = {0: "severe", 1: "moderate", 2: "not depression"}
 
 LABEL_DESCRIPTIONS = {
@@ -41,10 +47,21 @@ LABEL_DESCRIPTIONS = {
 }
 
 # ── Calibrated severity thresholds ────────────────────────────────────
-# If severe probability exceeds this even when not the top class → escalate to severe
-SEVERE_ESCALATION_THRESHOLD = 0.30
-# Weighted score weights: severe=1.0, moderate=0.5, not_depression=0.0
-SEVERITY_WEIGHTS = [1.0, 0.5, 0.0]
+# If severe probability reaches this level even when moderate has higher prob,
+# the case is clinically significant enough to escalate to "severe".
+# Lowered from 0.30: the model (trained on social-media text) tends to assign
+# 20–25% severe probability for formally-worded but clinically severe input.
+# A threshold of 0.20 correctly catches those cases without over-triggering on
+# genuinely moderate texts (which typically show severe_prob ≤ 0.15).
+SEVERE_ESCALATION_THRESHOLD = 0.20
+# Canonical class weights for the weighted severity score (not positional indices)
+SEVERITY_WEIGHTS = {"severe": 1.0, "moderate": 0.5, "not depression": 0.0}
+
+# ── Per-class probability indices (resolved at load time) ─────────────
+# These may differ from LABEL_MAP keys if the model's id2label order differs.
+_severe_idx   = 0
+_moderate_idx = 1
+_nodep_idx    = 2
 
 # ── Crisis / suicidal ideation patterns (used by bot.py) ─────────────
 # These patterns detect when the bot must show crisis resources FIRST.
@@ -76,22 +93,28 @@ def classify_severity(probs: np.ndarray) -> Tuple[str, float, str]:
     """
     Returns (label, severity_score, reason) from raw model probabilities.
 
-    Addresses the problem where argmax gives "moderate" even when
-    severe probability is meaningfully high (e.g. 30% severe / 62% moderate).
-    A 30% severe probability is clinically significant and should not be
-    silently overridden by a 62% moderate prediction.
+    Uses _severe_idx / _moderate_idx / _nodep_idx resolved at load() from
+    the model's actual id2label, so the correct probability column is always
+    used for each class regardless of the model's internal label ordering.
+
+    Escalation logic: if the severe-class probability reaches
+    SEVERE_ESCALATION_THRESHOLD even when moderate has the highest raw
+    probability, the case is classified as severe.  The threshold (0.20) is
+    tuned for the deproberta model which was trained on social-media text and
+    tends to assign 20–25% severe probability to formally-worded but
+    clinically severe input.
 
     severity_score: 0.0 (none) → 1.0 (severe), continuous.
     reason: human-readable string explaining the classification decision.
     """
-    severe_prob   = float(probs[0])
-    moderate_prob = float(probs[1])
-    nodep_prob    = float(probs[2])
+    severe_prob   = float(probs[_severe_idx])
+    moderate_prob = float(probs[_moderate_idx])
+    nodep_prob    = float(probs[_nodep_idx])
 
-    # Weighted severity score
-    score = (severe_prob * SEVERITY_WEIGHTS[0]
-             + moderate_prob * SEVERITY_WEIGHTS[1]
-             + nodep_prob * SEVERITY_WEIGHTS[2])
+    # Weighted severity score using canonical class weights
+    score = (severe_prob   * SEVERITY_WEIGHTS["severe"]
+             + moderate_prob * SEVERITY_WEIGHTS["moderate"]
+             + nodep_prob    * SEVERITY_WEIGHTS["not depression"])
 
     argmax_idx   = int(np.argmax(probs))
     argmax_label = LABEL_MAP[argmax_idx]
@@ -149,6 +172,7 @@ _explainer = None
 
 def load():
     global _tokenizer, _model, _explainer
+    global _severe_idx, _moderate_idx, _nodep_idx
     if _model is not None:
         return
     print(f"Loading {MODEL_NAME} on {DEVICE} …")
@@ -157,6 +181,67 @@ def load():
     _model.to(DEVICE)
     _model.eval()
     print(f"Model loaded. Labels: {_model.config.id2label}")
+
+    # ── Resolve per-class probability indices from the model's id2label ──
+    # The model's label strings may use different casing or wording than
+    # LABEL_MAP.  We normalise both sides and find which output column
+    # corresponds to "severe", "moderate", and "not depression".
+    def _canonical(s: str) -> str:
+        s = s.lower().strip()
+        if s.startswith("not ") or s in ("no depression", "not depression", "none"):
+            return "not depression"
+        if "moderate" in s:
+            return "moderate"
+        if "severe" in s:
+            return "severe"
+        return s
+
+    try:
+        model_labels = {int(k): _canonical(v)
+                        for k, v in _model.config.id2label.items()}
+    except (ValueError, TypeError) as exc:
+        logger.warning(
+            "Could not parse model id2label keys as integers (%s). "
+            "Falling back to assumed order: severe=0, moderate=1, not_dep=2.",
+            exc,
+        )
+        model_labels = {}
+
+    resolved_severe   = None
+    resolved_moderate = None
+    resolved_nodep    = None
+    for idx, canon in model_labels.items():
+        if canon == "severe":
+            resolved_severe = idx
+        elif canon == "moderate":
+            resolved_moderate = idx
+        elif canon == "not depression":
+            resolved_nodep = idx
+
+    if None in (resolved_severe, resolved_moderate, resolved_nodep):
+        logger.warning(
+            "Could not fully resolve label indices from model id2label=%s. "
+            "Falling back to assumed order: severe=0, moderate=1, not_dep=2. "
+            "Raw model labels: %s",
+            dict(_model.config.id2label),
+            model_labels,
+        )
+    else:
+        _severe_idx   = resolved_severe
+        _moderate_idx = resolved_moderate
+        _nodep_idx    = resolved_nodep
+        if (_severe_idx, _moderate_idx, _nodep_idx) != (0, 1, 2):
+            logger.warning(
+                "Model id2label order differs from assumed LABEL_MAP. "
+                "Corrected indices — severe=%d, moderate=%d, not_dep=%d",
+                _severe_idx, _moderate_idx, _nodep_idx,
+            )
+        else:
+            logger.info(
+                "Label indices confirmed: severe=%d, moderate=%d, not_dep=%d",
+                _severe_idx, _moderate_idx, _nodep_idx,
+            )
+
     print("Initialising SHAP explainer …")
     _explainer = shap.Explainer(
         lambda texts: predict_proba(list(texts)),
@@ -168,7 +253,9 @@ def load():
 
 def predict_proba(texts: List[str]) -> np.ndarray:
     """
-    Returns raw softmax probabilities shape (n, 3): [severe, moderate, not_depression].
+    Returns raw softmax probabilities shape (n, 3).
+    Column order matches the model's id2label (resolved at load time).
+    Use _severe_idx / _moderate_idx / _nodep_idx to access each class.
     The USER'S TEXT is passed directly — no reframing.
     """
     load()
