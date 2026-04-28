@@ -31,10 +31,9 @@ from architecture.rag_explainer.rag_retriever           import retrieve, format_
 logger = logging.getLogger("rag_explainer")
 
 SYSTEM_PROMPT = (
-    "You are an empathetic, non-diagnostic mental health support assistant. "
-    "You help users understand AI-generated depression assessments using "
-    "retrieved clinical knowledge. Speak warmly and in plain language. "
-    "Never diagnose. Always recommend professional support."
+    "You explain AI assessment factors in plain, everyday language. "
+    "Focus only on what in the user's text influenced the result. "
+    "Avoid jargon, avoid scores/percentages, and do not give advice."
 )
 
 
@@ -72,11 +71,6 @@ def run_rag_pipeline(user_text: str, top_k: int = 3) -> RAGResult:
 
 
 def build_rag_prompt(user_query: str, result: RAGResult) -> str:
-    prob_lines = []
-    for i, label in LABEL_MAP.items():
-        bar = "█" * int(result.pred_probs[i] * 20)
-        prob_lines.append(f"  {label:<18s} {bar:<20s} {result.pred_probs[i]*100:.1f}%")
-    prob_block    = "\n".join(prob_lines)
     label_meaning = LABEL_DESCRIPTIONS.get(result.pred_label, "")
     symptom_names = [d.symptom_name for d in result.retrieved_docs]
     knowledge     = format_retrieved_for_prompt(result.retrieved_docs)
@@ -88,26 +82,23 @@ USER'S MESSAGE:
 
 MODEL PREDICTION: {result.pred_label.upper()}
 {label_meaning}
-Severity score: {result.severity_score:.2f} / 1.0  ({result.severity_reason})
 
-Probability distribution:
-{prob_block}
+MATCHED CLINICAL THEMES (from PHQ-8):
+{', '.join(symptom_names)}
 
-RETRIEVED CLINICAL KNOWLEDGE (PHQ-8):
-Matched symptoms: {', '.join(symptom_names)}
-
+REFERENCE NOTES (for you):
 {knowledge}
 
-YOUR TASK:
-1. Acknowledge warmly and validate the user's experience.
-2. Explain the prediction — connect specific phrases from their message to
-   the matched PHQ-8 symptoms by name, in plain language.
-3. Validate that what they describe is real and clinically recognised.
-4. Give 2-3 concrete, evidence-based suggestions tied to the matched symptoms.
-5. Close with a reminder this is an AI tool not a diagnosis, and encourage
-   professional support. If prediction is 'severe', add crisis resources.
+YOUR TASK — write a short, user-friendly response that:
+1. States the predicted level in plain words.
+2. Connects 2-3 phrases from the message to simple, everyday descriptions
+   of the matched themes (avoid clinical jargon).
+3. Keeps the focus on explanation of factors, not advice.
 
-Tone: warm, validating, non-clinical. Length: 250-400 words.
+Constraints:
+- Do NOT mention RAG, PHQ-8, probabilities, or scores.
+- Do NOT include self-care tips, support suggestions, or disclaimers.
+- Length: 90-130 words.
 """
 
 

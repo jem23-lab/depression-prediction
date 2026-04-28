@@ -87,6 +87,49 @@ Bot:  [Preview: moderate, 71.2%, matched: Anhedonia, Concentration Problems]
       [Retrieved symptom breakdown with clinical definitions]
 ```
 
+## Bot evaluation flow (updated)
+
+The bot now runs a controlled evaluation protocol:
+
+1. User sends `/assess`.
+2. Bot uses a hardcoded severe-depression participant paragraph (DAIC-WOZ style).
+2. Bot randomly picks a hardcoded participant paragraph from a small pool (severe and moderate, DAIC-WOZ style).
+3. Bot randomly selects one of 5 explanation use cases (SHAP, RAG, Hybrid, Counterfactual, MCP).
+4. Bot shows the generated explanation.
+5. User rates the explanation from 1-5 on:
+   - Clarity
+   - Correctness (logical and factual alignment with question)
+   - Helpfulness (how well it answers the user's intent)
+6. Bot updates the same evaluation prompt message as each score is entered.
+7. Bot saves the record in `logs/evaluation_records.csv`.
+
+Saved CSV columns:
+- `timestamp_utc`
+- `user_id`
+- `session_id`
+- `paragraph_id`
+- `paragraph_text`
+- `selected_use_case`
+- `selected_use_case_name`
+- `prediction_label`
+- `prediction_confidence`
+- `explanation_text`
+- `rating_clarity`
+- `rating_correctness`
+- `rating_helpfulness`
+- `rating_overall_avg`
+
+## Run
+
+```bash
+pip install -r requirements.txt
+export TELEGRAM_BOT_TOKEN="your_token"
+export GOOGLE_API_KEY="your_key"
+python bot.py
+```
+
+In Telegram, use `/assess` to start each evaluation cycle.
+
 ## How to add Use Case 3 (SHAP + RAG)
 
 1. Create `hybrid_shap_rag/hybrid_explainer.py`

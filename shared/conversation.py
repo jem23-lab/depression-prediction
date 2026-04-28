@@ -1,77 +1,22 @@
 """
 shared/conversation.py
 ────────────────────────────────────────────────────────────────────
-Shared Telegram conversation FSM used by ALL use cases.
+Shared Telegram conversation FSM for fixed-text evaluation flow.
 
 States:
-  IDLE      → waiting for /start, /help, or /assess
-  CHOOSING  → user shown use-case menu, waiting for choice
-  WAITING   → prompted for free-text input
-  DONE      → text ready, pipeline can run
-
-Use cases available:
-  1 -> SHAP-only explanation
-  2 -> RAG-only explanation
-  3 -> Hybrid explanation
-  4 -> Counterfactual explanation
-  5 -> MCP modular router explanation
+  IDLE  → waiting for /start, /help, or /assess
+  READY → hardcoded paragraph can be processed by bot
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
-
-# ── Use case registry ────────────────────────────────────────────────
-USE_CASES = {
-    "1": {
-        "name":        "SHAP Explanation",
-        "description": "Uses token-level SHAP to show which words in your message drove the prediction.",
-        "emoji":       "🔬",
-        "status":      "available",
-    },
-    "2": {
-        "name":        "RAG Explanation",
-        "description": "Retrieves matching clinical symptom knowledge to explain your assessment.",
-        "emoji":       "📚",
-        "status":      "available",
-    },
-    "3": {
-        "name":        "SHAP + RAG + Counterfactual (Hybrid)",
-        "description": "Combines token-level SHAP, clinical knowledge retrieval, and counterfactual reasoning into one unified explanation.",
-        "emoji":       "🔀",
-        "status":      "available",
-    },
-    "4": {
-        "name":        "Counterfactual",
-        "description": "Shows what minimal change in your message would shift the AI prediction — and what that means for you.",
-        "emoji":       "🔄",
-        "status":      "available",
-    },
-    "5": {
-        "name":        "MCP Agent",
-        "description": "Modular agent that routes to the best explainer for your query.",
-        "emoji":       "🤖",
-        "status":      "available",
-    },
-}
-
-
-def build_menu_text() -> str:
-    lines = ["Please choose an explanation method:\n"]
-    for key, uc in USE_CASES.items():
-        status = "" if uc["status"] == "available" else " (coming soon)"
-        lines.append(f"  {uc['emoji']} {key}. {uc['name']}{status}")
-        lines.append(f"     {uc['description']}\n")
-    lines.append("Reply with the number (e.g. 1 or 2).")
-    return "\n".join(lines)
 
 
 # ── Session state ────────────────────────────────────────────────────
 @dataclass
 class UserSession:
-    user_id:     int
-    state:       str = "IDLE"      # IDLE | CHOOSING | WAITING | DONE
-    use_case:    str = ""          # "1", "2", etc.
-    user_text:   str = ""
+    user_id: int
+    state: str = "IDLE"      # IDLE | READY
 
 
 _sessions: dict[int, UserSession] = {}
@@ -92,27 +37,25 @@ def process_message(user_id: int, text: str) -> dict:
     """
     Returns:
       {
-        "response"  : str,           message to send back
-        "status"    : str,           idle | choosing | waiting | ready
-        "use_case"  : str | None,    "1", "2", etc.
-        "user_text" : str | None,    text ready for pipeline
+        "response"  : str,
+        "status"    : str,          idle | ready
+        "user_text" : str | None,   reserved for compatibility
       }
     """
     session = get_session(user_id)
-    text    = text.strip()
-    lower   = text.lower()
+    text = text.strip()
+    lower = text.lower()
 
-    # ── Global commands (work from any state) ────────────────────────
     if lower in ("/start", "/help"):
         reset_session(user_id)
         return _reply(
-            "👋 Welcome to the Depression Assessment Assistant\n\n"
-            "This tool uses AI to assess depression signals in your message "
-            "and explain the result using different XAI methods.\n\n"
+            "👋 Welcome to the Depression Explanation Evaluation Bot\n\n"
+            "This tool shows one fixed participant paragraph and generates an AI explanation "
+            "using a randomly selected explanation method.\n\n"
+            "After that, you will rate the explanation from 1 to 5 on:\n"
+            "1) Clarity\n2) Correctness\n3) Helpfulness\n\n"
             "Type /assess to begin.\n"
-            "Type /reset to start over.\n\n"
-            "This is not a clinical tool. If you are in crisis, please "
-            "contact a mental health professional immediately.",
+            "Type /reset to start over.",
             status="idle",
         )
 
@@ -120,72 +63,15 @@ def process_message(user_id: int, text: str) -> dict:
         reset_session(user_id)
         return _reply("Session reset. Type /assess to begin.", status="idle")
 
-    # ── /assess → show use-case menu ────────────────────────────────
     if lower == "/assess":
-        reset_session(user_id)
-        session = get_session(user_id)
-        session.state = "CHOOSING"
-        return _reply(build_menu_text(), status="choosing")
-
-    # ── CHOOSING state: user picks a use case ────────────────────────
-    if session.state == "CHOOSING":
-        if text not in USE_CASES:
-            return _reply(
-                f"Please reply with a number from 1 to {len(USE_CASES)}.\n\n"
-                + build_menu_text(),
-                status="choosing",
-            )
-        uc = USE_CASES[text]
-        if uc["status"] != "available":
-            available_keys = [k for k, v in USE_CASES.items() if v["status"] == "available"]
-            return _reply(
-                f"{uc['emoji']} {uc['name']} is coming soon.\n\n"
-                f"Please choose an available option: {', '.join(available_keys)}.\n\n"
-                + build_menu_text(),
-                status="choosing",
-            )
-        session.use_case = text
-        session.state    = "WAITING"
+        session.state = "READY"
         return _reply(
-            f"{uc['emoji']} {uc['name']} selected.\n\n"
-            "Please describe how you have been feeling recently in a few sentences. "
-            "Be as honest as you like — there are no right or wrong answers.\n\n"
-            "Example: \"I've been feeling really tired and empty lately. "
-            "I don't enjoy things I used to love and I can't concentrate.\"",
-            status="waiting",
-            use_case=text,
-        )
-
-    # ── WAITING state: user provides their text ──────────────────────
-    if session.state == "WAITING":
-        if len(text.split()) < 4:
-            return _reply(
-                "Please share a bit more — at least a sentence about "
-                "how you have been feeling. This helps the model give a better result.",
-                status="waiting",
-                use_case=session.use_case,
-            )
-        session.user_text = text
-        session.state     = "DONE"
-        return _reply(
-            "Got it. Analysing your message...\nThis may take a few seconds.",
+            "Starting a new evaluation. Generating explanation...",
             status="ready",
-            use_case=session.use_case,
-            user_text=text,
         )
 
-    # ── IDLE: treat substantive free text as implicit /assess ────────
-    if session.state == "IDLE" and len(text.split()) >= 5 and not lower.startswith("/"):
-        session.state    = "CHOOSING"
-        return _reply(
-            "I see you have shared something. First, please choose "
-            "which explanation method to use:\n\n" + build_menu_text(),
-            status="choosing",
-        )
-
-    # ── Fallback ─────────────────────────────────────────────────────
     return _reply(
-        "Type /assess to start an assessment, or /help for more info.",
+        "Type /assess to start an evaluation, or /help for more info.",
         status="idle",
     )
 
@@ -193,12 +79,10 @@ def process_message(user_id: int, text: str) -> dict:
 def _reply(
     text: str,
     status: str,
-    use_case: Optional[str] = None,
     user_text: Optional[str] = None,
 ) -> dict:
     return {
-        "response":  text,
-        "status":    status,
-        "use_case":  use_case,
+        "response": text,
+        "status": status,
         "user_text": user_text,
     }

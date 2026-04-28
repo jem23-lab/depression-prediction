@@ -32,11 +32,9 @@ from architecture.hybrid_shap_rag_counterfactual.hybrid_pipeline import HybridRe
 logger = logging.getLogger("hybrid_explainer")
 
 SYSTEM_PROMPT = (
-    "You are an expert mental health support assistant that explains AI depression "
-    "assessments by synthesising three complementary XAI methods: token-level SHAP "
-    "analysis, clinical knowledge retrieval (RAG), and counterfactual reasoning. "
-    "Produce one cohesive, warm, empowering explanation — not three separate sections. "
-    "Never diagnose. Always recommend professional support."
+    "You explain AI assessment factors in plain, everyday language. "
+    "Focus only on what in the user's text influenced the result. "
+    "Avoid jargon, avoid scores/percentages, and do not give advice."
 )
 
 
@@ -176,75 +174,34 @@ def build_hybrid_prompt(user_query: str, result: HybridResult) -> str:
     )
 
     # ── Assemble full prompt ──────────────────────────────────────────
-    prompt = f"""You are explaining an AI depression screening result using three XAI methods simultaneously.
+    prompt = f"""You are explaining an AI depression screening result using several sources of evidence.
 
-═══════════════════════════════════════════════════════════════
 USER'S MESSAGE:
 "{user_query}"
 
-═══════════════════════════════════════════════════════════════
 MODEL PREDICTION: {result.pred_label.upper()}
 {label_meaning}
 
-Probability distribution:
-{prob_block}
-
-═══════════════════════════════════════════════════════════════
-LAYER 1 — SHAP TOKEN ANALYSIS
-(Which words drove the prediction, measured by SHAP contribution scores)
-
+EVIDENCE (for you):
+- Key words/phrases that influenced the result:
 {shap_block}
 
-═══════════════════════════════════════════════════════════════
-LAYER 2 — CLINICAL KNOWLEDGE (PHQ-8 RAG Retrieval)
-(PHQ-8 symptoms retrieved as matching the user's language patterns)
-
+- Related themes from knowledge base:
 {rag_block}
 
-═══════════════════════════════════════════════════════════════
-LAYER 3 — COUNTERFACTUAL ANALYSIS
-(Minimal text edits that would shift the prediction to a lower severity)
-
+- Example wording change that could shift the result:
 {cf_block}
 
-═══════════════════════════════════════════════════════════════
-SYNTHESIS INSTRUCTION:
-{synth}
+WRITE ONE SHORT, USER-FRIENDLY EXPLANATION that:
+1. States the predicted level in plain words.
+2. Mentions only 2-3 key words/phrases and explains why they mattered.
+3. Includes one simple "if the message said X instead of Y" example.
+4. Keeps the focus on explanation of factors, not advice.
 
-Counterfactual framing: {cf_note}
-
-═══════════════════════════════════════════════════════════════
-WRITE ONE UNIFIED EXPLANATION structured as follows (no section headers):
-
-Paragraph 1 — WARM OPENING (2-3 sentences):
-  Acknowledge the user's message with genuine empathy. Validate that
-  what they are experiencing is real and recognised.
-
-Paragraph 2 — PREDICTION + EVIDENCE (4-5 sentences):
-  State the predicted level and what it means. Then connect SHAP tokens
-  to RAG symptoms by name, e.g.: "The word 'empty' — which had the
-  strongest influence on the prediction — maps directly to the clinical
-  pattern of Depressed Mood, characterised by persistent emotional
-  numbness and loss of engagement."
-  If protective tokens exist, mention them as positive signals.
-
-Paragraph 3 — COUNTERFACTUAL INSIGHT (3-4 sentences):
-  Show the best counterfactual. Explain the specific word/phrase that
-  changed and why that matters clinically (tie it to the RAG symptom).
-  {cf_note}
-
-Paragraph 4 — ACTIONABLE STEPS (use a short list of exactly 3 items):
-  Each step must be tied to a specific signal:
-  • Step tied to a SHAP risk token  (e.g., 'tired' → sleep hygiene tips)
-  • Step tied to a RAG symptom      (e.g., Anhedonia → behavioural activation)
-  • Step tied to the counterfactual (e.g., the real behaviour the CF word change represents)
-
-Paragraph 5 — EMPATHETIC CLOSE (2-3 sentences):
-  Remind them this is an AI tool, not a clinical diagnosis.
-  Encourage speaking to a mental health professional.
-  {crisis_note}
-
-Tone: warm, clear, empowering. Total length: 380-520 words.
+Constraints:
+- Do NOT mention SHAP, RAG, counterfactuals, PHQ-8, or scores.
+- Do NOT include self-care tips, support suggestions, or disclaimers.
+- Length: 120-170 words.
 """
     return prompt
 

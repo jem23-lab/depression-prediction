@@ -19,6 +19,8 @@ Run:
 import os
 import sys
 import logging
+import random
+from datetime import datetime, timezone
 
 from telegram import Update
 from telegram.ext import (
@@ -36,6 +38,7 @@ sys.path.insert(0, _ROOT)
 from shared.conversation     import process_message
 from shared.llm_client       import strip_markdown
 from shared.depression_model import load as preload_model
+from shared.eval_logger      import append_evaluation_row
 
 # ── Logging ──────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -94,43 +97,274 @@ async def send_footer(update: Update):
     )
 
 
+def _format_box(title: str, body: str, width: int = 48) -> str:
+    line = "=" * width
+    divider = "-" * width
+    return f"{line}\n{title}\n{divider}\n{body}"
+
+
+def _join_box_lines(lines: list) -> str:
+    return "\n".join([ln for ln in lines if ln is not None])
+
+
+PARAGRAPHS = [
+    {
+        "id": "daic_woz_severe_001",
+        "severity": "severe",
+        "text": (
+            "I don't really enjoy anything anymore. Most days I wake up feeling exhausted, "
+            "and even simple tasks feel overwhelming. I avoid talking to people because it feels "
+            "like too much effort, and I keep thinking that I'm a burden to everyone around me. "
+            "My sleep is broken, my appetite is low, and I can't focus long enough to finish things. "
+            "It has been like this for a long time, and I honestly feel hopeless about getting better."
+        ),
+    },
+    {
+        "id": "daic_woz_severe_002",
+        "severity": "severe",
+        "text": (
+            "I feel empty almost all the time. I stay in bed for hours because I have no energy "
+            "to do basic things, and I cancel plans because being around people feels impossible. "
+            "I keep blaming myself and thinking I am failing at everything. My concentration is poor, "
+            "my sleep is irregular, and even eating feels like a chore. I don't see much point in the future."
+        ),
+    },
+    {
+        "id": "daic_woz_moderate_001",
+        "severity": "moderate",
+        "text": (
+            "I've been feeling down for a while and I don't enjoy things as much as I used to. "
+            "I still go to classes and meet people, but it takes much more effort than before. "
+            "My sleep is inconsistent and I find it hard to focus sometimes, which makes me worry "
+            "that I am falling behind."
+        ),
+    },
+    {
+        "id": "daic_woz_moderate_002",
+        "severity": "moderate",
+        "text": (
+            "Some days I feel okay, but many days I feel low and tired without a clear reason. "
+            "I am less motivated to do my routine activities, and I avoid social plans more often. "
+            "I can still manage my responsibilities, but everything feels heavier and slower than usual."
+        ),
+    },
+]
+
+USE_CASES = {
+    "1": "SHAP",
+    "2": "RAG",
+    "3": "HYBRID",
+    "4": "COUNTERFACTUAL",
+    "5": "MCP",
+}
+
+EVAL_CRITERIA = [
+    ("clarity", "Clarity"),
+    ("correctness", "Correctness (logical and factual alignment with question)"),
+    ("helpfulness", "Helpfulness (how well it answers the user's intent)"),
+]
+
+
 # ── Central message handler ──────────────────────────────────────────
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text    = (update.message.text or "").strip()
     logger.info("User %s: %s", user_id, text[:80])
 
+    if await _handle_rating(update, context):
+        return
+
     result = process_message(user_id, text)
     await safe_send(update, result["response"])
 
-    if result["status"] == "ready" and result.get("user_text"):
-        await dispatch_pipeline(update, user_id, result["use_case"], result["user_text"])
+    if result["status"] == "ready":
+        await _start_evaluation(update, context)
 
 
-async def dispatch_pipeline(update: Update, user_id: int, use_case: str, user_text: str):
-    """Route to the correct use-case pipeline."""
+async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    flow = context.user_data.get("eval_flow")
+    if not flow:
+        return False
+
+    raw = (update.message.text or "").strip()
     try:
-        if use_case == "1":
-            await run_shap_pipeline(update, user_id, user_text)
-        elif use_case == "2":
-            await run_rag_pipeline(update, user_id, user_text)
-        elif use_case == "3":
-            await run_hybrid_pipeline_handler(update, user_id, user_text)
-        elif use_case == "4":
-            await run_cf_pipeline(update, user_id, user_text)
-        elif use_case == "5":
-            await run_mcp_pipeline_handler(update, user_id, user_text)
-        else:
-            await update.message.reply_text(
-                f"Use case {use_case} is not yet implemented.\n"
-                "Please choose 1, 2, 3, 4, or 5 from the /assess menu."
-            )
-    except Exception as exc:
-        logger.exception("Pipeline error (UC%s) for user %s: %s", use_case, user_id, exc)
-        await update.message.reply_text(
-            f"Something went wrong.\n\nError: {str(exc)[:400]}\n\n"
-            "Please try /assess again or check the terminal logs."
+        score = int(raw)
+    except ValueError:
+        await update.message.reply_text("Please enter a valid integer score from 1 to 5.")
+        return True
+
+    if score < 1 or score > 5:
+        await update.message.reply_text("Score must be between 1 and 5.")
+        return True
+
+    step = flow["step"]
+    criterion_key, _ = EVAL_CRITERIA[step]
+    flow["ratings"][criterion_key] = score
+    flow["step"] = step + 1
+
+    updated_text = _evaluation_prompt(
+        paragraph_text=flow["paragraph_text"],
+        explanation=flow["explanation"],
+        ratings=flow["ratings"],
+        step=flow["step"],
+    )
+    try:
+        await context.bot.edit_message_text(
+            chat_id=update.effective_chat.id,
+            message_id=flow["prompt_message_id"],
+            text=updated_text,
         )
+    except Exception:
+        sent = await update.message.reply_text(updated_text)
+        flow["prompt_message_id"] = sent.message_id
+
+    if flow["step"] < len(EVAL_CRITERIA):
+        return True
+
+    ratings = flow["ratings"]
+    avg = round((ratings["clarity"] + ratings["correctness"] + ratings["helpfulness"]) / 3.0, 3)
+    csv_path = os.path.join(_ROOT, "logs", "evaluation_records.csv")
+    append_evaluation_row(
+        csv_path,
+        {
+            "user_id": str(update.effective_user.id),
+            "session_id": flow["session_id"],
+            "paragraph_id": flow["paragraph_id"],
+            "paragraph_text": flow["paragraph_text"],
+            "selected_use_case": flow["selected_use_case"],
+            "selected_use_case_name": flow["selected_use_case_name"],
+            "prediction_label": flow["prediction_label"],
+            "prediction_confidence": flow["prediction_confidence"],
+            "explanation_text": flow["explanation"],
+            "rating_clarity": ratings["clarity"],
+            "rating_correctness": ratings["correctness"],
+            "rating_helpfulness": ratings["helpfulness"],
+            "rating_overall_avg": avg,
+        },
+    )
+
+    await update.message.reply_text(
+        "Thanks. Your evaluation has been saved.\n"
+        f"Scores -> Clarity: {ratings['clarity']}, Correctness: {ratings['correctness']}, Helpfulness: {ratings['helpfulness']}\n"
+        f"Average: {avg:.2f}\n\n"
+        "Type /assess to run another evaluation."
+    )
+    context.user_data.pop("eval_flow", None)
+    return True
+
+
+async def _start_evaluation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    selected_paragraph = random.choice(PARAGRAPHS)
+    paragraph_id = selected_paragraph["id"]
+    paragraph_text = selected_paragraph["text"]
+    paragraph_severity = selected_paragraph["severity"]
+
+    eval_result = await _run_random_explanation(paragraph_text)
+
+    context.user_data["eval_flow"] = {
+        "session_id": f"{user_id}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+        "paragraph_id": paragraph_id,
+        "paragraph_text": paragraph_text,
+        "paragraph_severity": paragraph_severity,
+        "selected_use_case": eval_result["use_case"],
+        "selected_use_case_name": eval_result["use_case_name"],
+        "prediction_label": eval_result["prediction_label"],
+        "prediction_confidence": eval_result["prediction_confidence"],
+        "explanation": eval_result["explanation"],
+        "ratings": {"clarity": None, "correctness": None, "helpfulness": None},
+        "step": 0,
+        "prompt_message_id": None,
+    }
+
+    await update.message.reply_text(_format_box("Evaluation Paragraph", paragraph_text))
+    await safe_send(update, _format_box("Evaluation Explanation", eval_result["explanation"]))
+
+    text = _evaluation_prompt(
+        paragraph_text=paragraph_text,
+        explanation=eval_result["explanation"],
+        ratings=context.user_data["eval_flow"]["ratings"],
+        step=0,
+    )
+    sent = await update.message.reply_text(text)
+    context.user_data["eval_flow"]["prompt_message_id"] = sent.message_id
+
+
+async def _run_random_explanation(user_text: str) -> dict:
+    use_case = random.choice(list(USE_CASES.keys()))
+
+    if use_case == "1":
+        explain_with_shap, _, generate_shap_explanation = _get_shap_pipeline()
+        model_result = explain_with_shap(user_text)
+        explanation = generate_shap_explanation(user_text, model_result)
+    elif use_case == "2":
+        rag_pipeline, generate_rag_explanation, _ = _get_rag_pipeline()
+        model_result = rag_pipeline(user_text)
+        explanation = generate_rag_explanation(user_text, model_result)
+    elif use_case == "3":
+        run_hybrid, _, _, generate_explanation = _get_hybrid_pipeline()
+        model_result = run_hybrid(user_text)
+        explanation = generate_explanation(user_text, model_result)
+    elif use_case == "4":
+        generate_counterfactuals, _, generate_cf_explanation, _ = _get_cf_pipeline()
+        model_result = generate_counterfactuals(user_text, n_candidates=3, n_attempts=2)
+        explanation = generate_cf_explanation(user_text, model_result)
+    else:
+        run_mcp_pipeline = _get_mcp_pipeline()
+        model_result = run_mcp_pipeline(user_text)
+        explanation = model_result.get("explanation", "No explanation returned.")
+
+    pred_label, pred_conf = _extract_prediction_confidence(model_result)
+    return {
+        "use_case": use_case,
+        "use_case_name": USE_CASES[use_case],
+        "prediction_label": pred_label,
+        "prediction_confidence": pred_conf,
+        "explanation": explanation,
+    }
+
+
+def _extract_prediction_confidence(payload):
+    label = "unknown"
+    confidence = 0.0
+
+    if hasattr(payload, "pred_label"):
+        label = getattr(payload, "pred_label", "unknown")
+        idx = getattr(payload, "pred_label_idx", None)
+        probs = getattr(payload, "pred_probs", None)
+        if idx is not None and probs is not None:
+            try:
+                confidence = float(probs[idx])
+            except Exception:
+                confidence = 0.0
+    elif isinstance(payload, dict):
+        label = str(payload.get("prediction", "unknown"))
+        try:
+            confidence = float(payload.get("confidence", 0.0) or 0.0)
+        except Exception:
+            confidence = 0.0
+
+    return label, confidence
+
+
+def _evaluation_prompt(paragraph_text: str, explanation: str, ratings: dict, step: int) -> str:
+    criteria_lines = [
+        "Rate the assistant's explanation based on:",
+        "1. Clarity",
+        "2. Correctness (logical and factual alignment with question)",
+        "3. Helpfulness (how well it answers the user's intent)",
+        "",
+    ]
+    for key, label in EVAL_CRITERIA:
+        value = ratings.get(key)
+        criteria_lines.append(f"- {label}: {'[pending]' if value is None else value}")
+
+    if step < len(EVAL_CRITERIA):
+        _, label = EVAL_CRITERIA[step]
+        criteria_lines.append("")
+        criteria_lines.append(f"Please enter {label} score (1-5).")
+
+    return _format_box("Evaluation", "\n".join(criteria_lines))
 
 
 # ── Use Case 1: SHAP ─────────────────────────────────────────────────
@@ -141,30 +375,39 @@ async def run_shap_pipeline(update: Update, user_id: int, user_text: str):
     shap_result = explain_with_shap(user_text)
     logger.info(format_debug(shap_result))
 
-    label      = shap_result.pred_label
+    label = shap_result.pred_label
     confidence = shap_result.pred_probs[shap_result.pred_label_idx]
-    top_word   = shap_result.top_tokens[0]["token"] if shap_result.top_tokens else "—"
+    top_word = shap_result.top_tokens[0]["token"] if shap_result.top_tokens else "—"
 
-    await update.message.reply_text(
-        f"🔬 Initial result (SHAP)\n"
-        f"  Level      : {label}\n"
-        f"  Confidence : {confidence*100:.1f}%\n"
-        f"  Key word   : {top_word}\n\n"
-        "Generating full explanation..."
+    paragraph_box = _format_box("1) Paragraph", user_text)
+    prediction_box = _format_box(
+        "2) Prediction",
+        _join_box_lines(
+            [
+                f"Level: {label}",
+                f"Confidence: {confidence*100:.1f}%",
+                f"Key word: {top_word}",
+            ]
+        ),
     )
 
-    explanation = generate_shap_explanation(user_text, shap_result)
-    await safe_send(update, "Your Assessment (SHAP)\n" + "-"*35 + "\n\n" + explanation)
+    await update.message.reply_text(paragraph_box)
+    await update.message.reply_text(prediction_box)
 
     if shap_result.top_tokens:
-        lines = ["SHAP Token Breakdown\n"]
+        tool_lines = ["Top SHAP tokens:"]
         for t in shap_result.top_tokens[:6]:
             arrow = "🔴" if t["shap"] > 0 else "🟢"
-            line  = f"  {arrow} '{t['token']}'  SHAP={t['shap']:+.4f}  {t['direction']}"
+            line = f"{arrow} '{t['token']}' SHAP={t['shap']:+.4f} {t['direction']}"
             if t["note"]:
-                line += f"\n       ({t['note']})"
-            lines.append(line)
-        await update.message.reply_text("\n".join(lines))
+                line += f" ({t['note']})"
+            tool_lines.append(line)
+        await update.message.reply_text(_format_box("3) Tool Result", "\n".join(tool_lines)))
+
+    await update.message.reply_text("Generating full explanation...")
+
+    explanation = generate_shap_explanation(user_text, shap_result)
+    await safe_send(update, _format_box("4) Explanation", explanation))
 
     await send_footer(update)
 
@@ -177,28 +420,36 @@ async def run_rag_pipeline(update: Update, user_id: int, user_text: str):
     rag_result = rag_pipeline(user_text)
     logger.info(format_rag_debug(rag_result))
 
-    label     = rag_result.pred_label
+    label = rag_result.pred_label
     confidence = rag_result.pred_probs[rag_result.pred_label_idx]
-    symptoms  = ", ".join(d.symptom_name for d in rag_result.retrieved_docs)
+    symptoms = ", ".join(d.symptom_name for d in rag_result.retrieved_docs) or "n/a"
 
-    await update.message.reply_text(
-        f"📚 Initial result (RAG)\n"
-        f"  Level           : {label}\n"
-        f"  Confidence      : {confidence*100:.1f}%\n"
-        f"  Matched symptoms: {symptoms}\n\n"
-        "Generating full explanation..."
+    paragraph_box = _format_box("1) Paragraph", user_text)
+    prediction_box = _format_box(
+        "2) Prediction",
+        _join_box_lines(
+            [
+                f"Level: {label}",
+                f"Confidence: {confidence*100:.1f}%",
+                f"Matched symptoms: {symptoms}",
+            ]
+        ),
     )
 
-    explanation = generate_rag_explanation(user_text, rag_result)
-    await safe_send(update, "Your Assessment (RAG)\n" + "-"*35 + "\n\n" + explanation)
+    await update.message.reply_text(paragraph_box)
+    await update.message.reply_text(prediction_box)
 
-    lines = ["Retrieved Clinical Knowledge\n"]
+    tool_lines = ["Retrieved clinical knowledge:"]
     for i, doc in enumerate(rag_result.retrieved_docs, 1):
-        lines.append(
-            f"  {i}. {doc.symptom_name} ({doc.symptom_type})\n"
-            f"     {doc.clinical_definition[:100]}..."
+        tool_lines.append(
+            f"{i}. {doc.symptom_name} ({doc.symptom_type})\n   {doc.clinical_definition[:100]}..."
         )
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text(_format_box("3) Tool Result", "\n".join(tool_lines)))
+
+    await update.message.reply_text("Generating full explanation...")
+
+    explanation = generate_rag_explanation(user_text, rag_result)
+    await safe_send(update, _format_box("4) Explanation", explanation))
 
     await send_footer(update)
 
@@ -216,46 +467,42 @@ async def run_hybrid_pipeline_handler(update: Update, user_id: int, user_text: s
     result = run_hybrid(user_text)
     logger.info(format_debug(result))
 
-    # Preview showing what all three found
-    await update.message.reply_text(format_preview(result))
+    paragraph_box = _format_box("1) Paragraph", user_text)
+    prediction_box = _format_box("2) Prediction", format_preview(result))
 
-    # Single unified LLM explanation synthesising all three
-    explanation = generate_explanation(user_text, result)
-    await safe_send(update, "Your Hybrid Assessment (SHAP + RAG + Counterfactual)\n" + "-"*50 + "\n\n" + explanation)
+    await update.message.reply_text(paragraph_box)
+    await update.message.reply_text(prediction_box)
 
-    # ── Detail breakdown: all three signals ──────────────────────────
-    detail_lines = ["Detailed Evidence from All Three Signals\n"]
+    detail_lines = ["Detailed evidence from all three signals:"]
 
-    # SHAP tokens
     if result.shap_result and result.shap_result.top_tokens:
-        detail_lines.append("SHAP — Risk Tokens:")
+        detail_lines.append("\nSHAP — Risk tokens:")
         for t in result.shap_result.top_tokens[:5]:
             arrow = "🔴" if t["shap"] > 0 else "🟢"
-            detail_lines.append(f"  {arrow} '{t['token']}' SHAP={t['shap']:+.4f}  {t['direction']}")
-        detail_lines.append("")
+            detail_lines.append(f"{arrow} '{t['token']}' SHAP={t['shap']:+.4f} {t['direction']}")
 
-    # RAG symptoms
     if result.rag_result and result.rag_result.retrieved_docs:
-        detail_lines.append("RAG — Matched PHQ-8 Symptoms:")
+        detail_lines.append("\nRAG — Matched PHQ-8 symptoms:")
         for i, doc in enumerate(result.rag_result.retrieved_docs, 1):
             detail_lines.append(
-                f"  {i}. {doc.symptom_name} ({doc.symptom_type})\n"
-                f"     {doc.clinical_definition[:90]}..."
+                f"{i}. {doc.symptom_name} ({doc.symptom_type})\n   {doc.clinical_definition[:90]}..."
             )
-        detail_lines.append("")
 
-    # CF candidates
     if result.cf_result and result.cf_result.candidates:
-        detail_lines.append("Counterfactual — Candidates:")
+        detail_lines.append("\nCounterfactual — Candidates:")
         for i, c in enumerate(result.cf_result.candidates[:3], 1):
             status = "FLIP" if c["flip_success"] else "no flip"
             detail_lines.append(
-                f"  {i}. [{status}] [{c['label']}] min={c['minimality']:.2f}\n"
-                f"     \"{c['text'][:100]}\""
+                f"{i}. [{status}] [{c['label']}] min={c['minimality']:.2f}\n   \"{c['text'][:100]}\""
             )
 
     if len(detail_lines) > 1:
-        await update.message.reply_text("\n".join(detail_lines))
+        await update.message.reply_text(_format_box("3) Tool Result", "\n".join(detail_lines)))
+
+    await update.message.reply_text("Generating full explanation...")
+
+    explanation = generate_explanation(user_text, result)
+    await safe_send(update, _format_box("4) Explanation", explanation))
 
     await send_footer(update)
 
@@ -273,21 +520,27 @@ async def run_cf_pipeline(update: Update, user_id: int, user_text: str):
     result = generate_counterfactuals(user_text, n_candidates=3, n_attempts=2)
     logger.info(format_cf_debug(result))
 
-    await update.message.reply_text(format_cf_preview(result))
+    paragraph_box = _format_box("1) Paragraph", user_text)
+    prediction_box = _format_box("2) Prediction", format_cf_preview(result))
 
-    explanation = generate_cf_explanation(user_text, result)
-    await safe_send(update, "Your Counterfactual Assessment\n" + "-"*35 + "\n\n" + explanation)
+    await update.message.reply_text(paragraph_box)
+    await update.message.reply_text(prediction_box)
 
     if result.candidates:
-        lines = ["Counterfactual Candidates\n"]
+        lines = ["Counterfactual candidates:"]
         for i, c in enumerate(result.candidates[:3], 1):
             status = "FLIP" if c["flip_success"] else "no flip"
             lines.append(
-                f"  {i}. [{status}] Predicted: {c['label']}\n"
-                f"     Minimality: {c['minimality']:.2f}  Meaning kept: {c['semantic_sim']:.2f}\n"
-                f"     \"{c['text'][:110]}\""
+                f"{i}. [{status}] Predicted: {c['label']}\n"
+                f"   Minimality: {c['minimality']:.2f}  Meaning kept: {c['semantic_sim']:.2f}\n"
+                f"   \"{c['text'][:110]}\""
             )
-        await update.message.reply_text("\n".join(lines))
+        await update.message.reply_text(_format_box("3) Tool Result", "\n".join(lines)))
+
+    await update.message.reply_text("Generating full explanation...")
+
+    explanation = generate_cf_explanation(user_text, result)
+    await safe_send(update, _format_box("4) Explanation", explanation))
 
     await send_footer(update)
 
@@ -309,22 +562,26 @@ async def run_mcp_pipeline_handler(update: Update, user_id: int, user_text: str)
     selected_server = result.get("selected_server", "n/a")
     fallback_used = bool(result.get("fallback_used", False))
     rationale = result.get("rationale", "")
-    explanation = result.get("explanation", "")
+    explanation = result.get("explanation", "No explanation returned.")
     errors = result.get("errors", []) or []
 
-    await update.message.reply_text(
-        f"🧠 Initial result (MCP)\n"
-        f"  Level           : {label}\n"
-        f"  Confidence      : {confidence*100:.1f}%\n"
-        f"  Selected server : {selected_server}\n"
-        f"  Fallback used   : {'yes' if fallback_used else 'no'}\n\n"
-        "Generating full explanation..."
+    paragraph_box = _format_box("1) Paragraph", user_text)
+    prediction_box = _format_box(
+        "2) Prediction",
+        _join_box_lines(
+            [
+                f"Level: {label}",
+                f"Confidence: {confidence*100:.1f}%",
+                f"Selected server: {selected_server}",
+                f"Fallback used: {'yes' if fallback_used else 'no'}",
+            ]
+        ),
     )
 
-    if explanation:
-        await safe_send(update, "Your Assessment (MCP)\n" + "-"*35 + "\n\n" + explanation)
+    await update.message.reply_text(paragraph_box)
+    await update.message.reply_text(prediction_box)
 
-    detail_lines = ["MCP Decision Details\n"]
+    detail_lines = ["MCP decision details:"]
     if rationale:
         detail_lines.append(f"Rationale: {rationale}")
 
@@ -332,35 +589,39 @@ async def run_mcp_pipeline_handler(update: Update, user_id: int, user_text: str)
         detail_lines.append("")
         detail_lines.append("Errors:")
         for i, e in enumerate(errors, 1):
-            detail_lines.append(f"  {i}. {e}")
+            detail_lines.append(f"{i}. {e}")
 
     if len(detail_lines) > 1:
-        await update.message.reply_text("\n".join(detail_lines))
+        await update.message.reply_text(_format_box("3) Tool Result", "\n".join(detail_lines)))
+
+    await update.message.reply_text("Generating full explanation...")
+
+    await safe_send(update, _format_box("4) Explanation", explanation))
 
     await send_footer(update)
 
 
-# ── Entry point ──────────────────────────────────────────────────────
+# ── Bot entrypoint ───────────────────────────────────────────────────
+async def _on_startup(app: Application):
+    try:
+        preload_model()
+        logger.info("Model preload complete.")
+    except Exception as exc:
+        logger.exception("Model preload failed: %s", exc)
+
+
 def main():
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set.")
-    if not os.environ.get("GOOGLE_API_KEY"):
-        raise RuntimeError("GOOGLE_API_KEY is not set.")
 
-    logger.info("Pre-loading depression model + SHAP explainer...")
-    preload_model()
-    logger.info("Model ready. Bot starting...")
+    application = Application.builder().token(token).build()
+    application.add_handler(CommandHandler(["start", "help", "assess", "reset"], handle_message))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    app = Application.builder().token(token).build()
-    app.add_handler(CommandHandler("start",  handle_message))
-    app.add_handler(CommandHandler("help",   handle_message))
-    app.add_handler(CommandHandler("assess", handle_message))
-    app.add_handler(CommandHandler("reset",  handle_message))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    logger.info("Bot is running. Send /start in Telegram.")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    application.post_init = _on_startup
+    logger.info("Bot started. Listening for updates...")
+    application.run_polling(close_loop=False)
 
 
 if __name__ == "__main__":

@@ -33,11 +33,9 @@ import logging
 logger = logging.getLogger("cf_explainer")
 
 SYSTEM_PROMPT = (
-    "You are an empathetic, non-diagnostic mental health support assistant. "
-    "You specialise in explaining AI depression assessments through counterfactual "
-    "reasoning — showing users what small changes could shift their result. "
-    "Speak warmly, practically, and in plain language. Never diagnose. "
-    "Always recommend professional support."
+    "You explain AI assessment factors in plain, everyday language. "
+    "Focus only on what in the user's text influenced the result. "
+    "Avoid jargon, avoid scores/percentages, and do not give advice."
 )
 
 
@@ -46,48 +44,26 @@ def build_cf_explanation_prompt(user_query: str, result: CounterfactualResult) -
     Builds a structured prompt for the CF explanation.
     Grounds the LLM in the actual counterfactual candidates found.
     """
-    # Probability block
-    prob_lines = []
-    for i, label in LABEL_MAP.items():
-        bar = "█" * int(result.original_probs[i] * 20)
-        prob_lines.append(f"  {label:<18s} {bar:<20s} {result.original_probs[i]*100:.1f}%")
-    prob_block = "\n".join(prob_lines)
-
     # Best CF block
     if result.best_cf and result.best_cf["flip_success"]:
         best = result.best_cf
         cf_block = (
-            f"  Text          : \"{best['text']}\"\n"
-            f"  New prediction: {best['label'].upper()} "
-            f"({best['probs'][int(list(LABEL_MAP.values()).index(best['label']))] * 100:.1f}% confidence)\n"
-            f"  Minimality    : {best['minimality']:.2f} (1.0 = no words changed)\n"
-            f"  Meaning kept  : {best['semantic_sim']:.2f} (1.0 = identical meaning)\n"
+            f"  Original: \"{user_query}\"\n"
+            f"  If changed to: \"{best['text']}\"\n"
+            f"  New prediction: {best['label'].upper()}"
         )
         flip_achieved = True
     elif result.best_cf:
         best = result.best_cf
         cf_block = (
-            f"  Text             : \"{best['text']}\"\n"
-            f"  Prediction still : {best['label'].upper()} (label did not flip, but moved)\n"
-            f"  Note: The model's decision boundary is strong — larger changes may be needed.\n"
+            f"  Closest change: \"{best['text']}\"\n"
+            f"  Prediction still: {best['label'].upper()} (shifted, but did not flip)"
         )
         flip_achieved = False
     else:
         cf_block = "  No valid counterfactual was generated."
         flip_achieved = False
         best = None
-
-    # All candidates (show top 3)
-    candidates_block = ""
-    if result.candidates:
-        lines = []
-        for i, c in enumerate(result.candidates[:3], 1):
-            status = "FLIP" if c["flip_success"] else "no flip"
-            lines.append(
-                f"  {i}. [{status}] [{c['label']}] \"{c['text'][:90]}...\"\n"
-                f"     minimality={c['minimality']:.2f}  meaning_kept={c['semantic_sim']:.2f}"
-            )
-        candidates_block = "\n".join(lines)
 
     # SHAP-guided tokens used
     token_names = [t["token"] for t in result.shap_guided_tokens[:4]]
@@ -96,65 +72,34 @@ def build_cf_explanation_prompt(user_query: str, result: CounterfactualResult) -
     orig_desc   = LABEL_DESCRIPTIONS.get(result.original_label, "")
     target_desc = LABEL_DESCRIPTIONS.get(result.target_label, "")
 
-    return f"""You are explaining a counterfactual AI depression assessment to a user.
+    return f"""You are explaining an AI depression screening result to a user.
 
-─────────────────────────────────────────────────
 USER'S ORIGINAL MESSAGE:
 "{user_query}"
 
-─────────────────────────────────────────────────
 CURRENT MODEL PREDICTION: {result.original_label.upper()}
 {orig_desc}
 
-Probability distribution:
-{prob_block}
+KEY WORDS THAT MOST INFLUENCED THE RESULT:
+{', '.join(token_names) if token_names else 'No specific words identified'}
 
-WORDS THAT MOST DROVE THIS PREDICTION (from SHAP):
-{", ".join(token_names) if token_names else "No specific tokens identified"}
-
-─────────────────────────────────────────────────
-COUNTERFACTUAL ANALYSIS (what would change the prediction):
+WHAT CHANGE COULD SHIFT THE RESULT:
 Target label: {result.target_label.upper()}
 {target_desc}
 
-Best counterfactual found:
+Best example change:
 {cf_block}
 
-All candidates generated:
-{candidates_block}
+YOUR TASK — write a short, user-friendly response that:
+1. States the predicted level in plain words.
+2. Mentions 2-3 key words/phrases that influenced the result and why.
+3. Gives one simple “if the message said X instead of Y” example.
+4. Keeps the focus on explanation of factors, not advice.
 
-Label flip achieved: {"YES" if flip_achieved else "NO — model boundary is strong"}
-
-─────────────────────────────────────────────────
-YOUR TASK — write a warm, clear explanation that:
-
-1. ACKNOWLEDGE the user's message gently. Validate that what they're feeling is real.
-
-2. EXPLAIN the prediction in 2-3 sentences:
-   - What "{result.original_label}" means in plain words
-   - Which specific words (from SHAP tokens) signalled this to the model
-
-3. COUNTERFACTUAL INSIGHT — this is the core of the explanation:
-   - Show the best counterfactual: "If you had written X instead of Y,
-     the model would have predicted [target]"
-   - Explain WHY that small change matters clinically
-     (e.g., "changing 'I never go out' to 'I sometimes go out' suggests
-     the anhedonia pattern is less severe")
-   - {"Mention that the label DID flip, which shows the model's boundary is sensitive to these words." if flip_achieved else "Note that even though the label didn't flip, the wording shift shows movement toward recovery language."}
-
-4. ACTIONABLE BRIDGE — connect the CF to real life:
-   - "The counterfactual suggests that if you could [specific behaviour],
-     the pattern the AI detected would weaken"
-   - Give 2 concrete, evidence-based steps tied directly to the CF change
-     (e.g., if CF changed social isolation language, suggest one small social
-     activity; if it changed fatigue language, suggest sleep hygiene)
-
-5. CLOSE:
-   - Remind them this is an AI tool, not a diagnosis
-   - Encourage speaking to a mental health professional
-   - {"Add a crisis helpline reminder." if result.original_label == "severe" else "End with an encouraging, empowering note."}
-
-Tone: warm, practical, empowering — not clinical. Length: 300-420 words.
+Constraints:
+- Do NOT mention "counterfactual", SHAP, scores, probabilities, or technical terms.
+- Do NOT include self-care tips, support suggestions, or disclaimers.
+- Length: 110-160 words.
 """
 
 
