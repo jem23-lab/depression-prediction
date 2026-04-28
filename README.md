@@ -3,44 +3,42 @@
 ## Folder Structure
 
 ```
-explainableDepressionPrediction/
+explainableDepressionPrediction_mcp_server/
 │
-├── bot.py                          ← SINGLE shared Telegram bot (all use cases)
+├── bot.py                          ← Single Telegram bot (all use cases)
 ├── test_pipeline.py                ← CLI test runner (no Telegram needed)
 ├── requirements.txt
 │
+├── architecture/
+│   ├── shap_explainer/             ← Use Case 1 (SHAP factors)
+│   ├── rag_explainer/              ← Use Case 2 (RAG factors)
+│   ├── hybrid_shap_rag_counterfactual/ ← Use Case 3 (Hybrid)
+│   ├── shap_counterfactual_explainer/  ← Use Case 4 (Counterfactual)
+│   └── mcp_modular_agent/          ← Use Case 5 (MCP)
+│
 ├── shared/                         ← Reusable code shared by ALL use cases
-│   ├── depression_model.py         ← deproberta model + SHAP + reframe_text()
+│   ├── depression_model.py         ← Model + SHAP + helpers
 │   ├── llm_client.py               ← Gemini client with fallback chain
-│   ├── conversation.py             ← FSM: use-case menu + text collection
+│   ├── conversation.py             ← Evaluation FSM
+│   ├── eval_logger.py              ← CSV logging
 │   └── phq8_knowledge_base.csv     ← PHQ-8 symptom knowledge base (RAG source)
 │
-├── shap_explainer/                 ← Use Case 1
-│   └── shap_explainer.py           ← prompt builder + Gemini call
-│
-├── rag_explainer/                  ← Use Case 2
-│   ├── rag_retriever.py            ← FAISS index over PHQ-8 CSV
-│   └── rag_explainer.py            ← RAG pipeline + prompt builder
-│
-├── hybrid_shap_rag/                ← Use Case 3 (coming soon)
-├── counterfactual_explainer/       ← Use Case 4 
-└── mcp_modular_agent/              ← Use Case 5 (coming soon)
+└── logs/
+    └── evaluation_records.csv
 ```
 
 ## What is shared vs what is use-case specific
 
 | Component | Shared? | Why |
 |-----------|---------|-----|
-| deproberta model loading | ✅ shared | One model, loaded once |
+| Model loading | ✅ shared | One model, loaded once |
 | `predict_proba()` | ✅ shared | Same for all UCs |
-| `reframe_text()` | ✅ shared | Fixes indirect phrasing for all UCs |
-| SHAP explainer | ✅ shared | UC1, UC3 use it |
+| SHAP token extraction | ✅ shared | UC1, UC3, UC4 use it |
 | Gemini client + fallback | ✅ shared | All UCs call Gemini |
-| Telegram FSM + menu | ✅ shared | One bot, user picks UC |
+| Telegram evaluation FSM | ✅ shared | One flow for all UCs |
 | `strip_markdown()` | ✅ shared | Telegram parse safety for all |
 | FAISS RAG index | ❌ UC2 only | Only RAG needs it |
-| SHAP prompt builder | ❌ UC1 only | Different prompt structure |
-| RAG prompt builder | ❌ UC2 only | Different prompt structure |
+| Prompt builders | ❌ per-UC | Different explanation formats |
 
 ## Setup
 
@@ -62,46 +60,35 @@ export GOOGLE_API_KEY="your_key"
 python bot.py
 ```
 
-## Bot conversation flow
+## Bot flow (current)
 
-```
-User: /assess
+The bot is evaluation-first (no menu). When the user sends `/assess`:
 
-Bot:  Please choose an explanation method:
-      🔬 1. SHAP Explanation
-         Uses token-level SHAP to show which words drove the prediction.
-      📚 2. RAG Explanation
-         Retrieves matching clinical symptom knowledge.
-      🔀 3. SHAP + RAG Combined  (coming soon)
-      🔄 4. Counterfactual        (coming soon)
-      🤖 5. MCP Agent             (coming soon)
+1. Bot selects a fixed participant paragraph (DAIC-WOZ style).
+2. Bot randomly selects one of 5 use cases (SHAP, RAG, Hybrid, Counterfactual, MCP).
+3. Bot sends multiple message boxes in order:
+   - 1) Paragraph (fixed)
+   - 2) Prediction (level + confidence)
+   - 3) Tool Result (raw factors)
+   - 4) Explanation (plain-language factor summary)
+4. Bot sends an Evaluation box that is editable after each rating.
+5. Ratings are stored in `logs/evaluation_records.csv`.
 
-User: 2
+## Explanation style (important)
 
-Bot:  RAG selected. Please describe how you've been feeling...
+Explanations are factor-only and user-friendly:
+- Focus only on the words/phrases that influenced the result.
+- Do not include advice, self-care tips, or support recommendations.
+- Avoid tool jargon (no SHAP/RAG/counterfactual terms) and no scores.
+- Keep output short and readable.
 
-User: I don't go out much, lost interest in hobbies, can't concentrate.
-
-Bot:  [Preview: moderate, 71.2%, matched: Anhedonia, Concentration Problems]
-      [Full Gemini explanation grounded in PHQ-8 KB]
-      [Retrieved symptom breakdown with clinical definitions]
-```
-
-## Bot evaluation flow (updated)
-
-The bot now runs a controlled evaluation protocol:
+## Evaluation flow
 
 1. User sends `/assess`.
-2. Bot uses a hardcoded severe-depression participant paragraph (DAIC-WOZ style).
-2. Bot randomly picks a hardcoded participant paragraph from a small pool (severe and moderate, DAIC-WOZ style).
-3. Bot randomly selects one of 5 explanation use cases (SHAP, RAG, Hybrid, Counterfactual, MCP).
-4. Bot shows the generated explanation.
-5. User rates the explanation from 1-5 on:
-   - Clarity
-   - Correctness (logical and factual alignment with question)
-   - Helpfulness (how well it answers the user's intent)
-6. Bot updates the same evaluation prompt message as each score is entered.
-7. Bot saves the record in `logs/evaluation_records.csv`.
+2. Bot shows the participant paragraph and explanation in separate boxes.
+3. Bot sends a single editable Evaluation box for ratings.
+4. The Evaluation box updates after each score entry.
+5. Results are appended to `logs/evaluation_records.csv`.
 
 Saved CSV columns:
 - `timestamp_utc`
@@ -129,12 +116,3 @@ python bot.py
 ```
 
 In Telegram, use `/assess` to start each evaluation cycle.
-
-## How to add Use Case 3 (SHAP + RAG)
-
-1. Create `hybrid_shap_rag/hybrid_explainer.py`
-2. Import from both `shared.depression_model` (for SHAP) and `rag_explainer.rag_retriever` (for RAG)
-3. Add `"3"` to `USE_CASES` in `shared/conversation.py` with `"status": "available"`
-4. Add `elif use_case == "3": await run_hybrid_pipeline(...)` in `bot.py`
-
-No other files need changing.
