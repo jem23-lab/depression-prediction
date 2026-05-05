@@ -97,6 +97,7 @@ async def send_footer(update: Update):
     )
 
 
+
 def _format_box(title: str, body: str, width: int = 48) -> str:
     line = "=" * width
     divider = "-" * width
@@ -109,43 +110,93 @@ def _join_box_lines(lines: list) -> str:
 
 PARAGRAPHS = [
     {
-        "id": "daic_woz_severe_001",
-        "severity": "severe",
+        "id": "daic_woz_not_001",
+        "severity": "not_depressed",
         "text": (
-            "I don't really enjoy anything anymore. Most days I wake up feeling exhausted, "
-            "and even simple tasks feel overwhelming. I avoid talking to people because it feels "
-            "like too much effort, and I keep thinking that I'm a burden to everyone around me. "
-            "My sleep is broken, my appetite is low, and I can't focus long enough to finish things. "
-            "It has been like this for a long time, and I honestly feel hopeless about getting better."
+            "I generally feel okay day to day. I have some stress from classes and deadlines, "
+            "but I manage to stay on top of things. I enjoy spending time with friends and relaxing "
+            "when I can. My sleep is fairly regular, and I don’t usually have trouble concentrating."
         ),
     },
     {
-        "id": "daic_woz_severe_002",
-        "severity": "severe",
+        "id": "daic_woz_not_002",
+        "severity": "not_depressed",
         "text": (
-            "I feel empty almost all the time. I stay in bed for hours because I have no energy "
-            "to do basic things, and I cancel plans because being around people feels impossible. "
-            "I keep blaming myself and thinking I am failing at everything. My concentration is poor, "
-            "my sleep is irregular, and even eating feels like a chore. I don't see much point in the future."
+            "Most days are pretty normal for me. I stay busy with work and hobbies, and I look forward "
+            "to socializing on weekends. I feel motivated to complete my tasks, and I don’t feel overly "
+            "burdened. My appetite and sleep are stable."
         ),
     },
     {
-        "id": "daic_woz_moderate_001",
+        "id": "daic_woz_not_003",
+        "severity": "not_depressed",
+        "text": (
+            "I feel balanced overall. There are occasional challenges, but I handle them without feeling "
+            "overwhelmed. I enjoy my daily routine and feel connected to people around me. I can focus "
+            "well and usually feel positive about my progress."
+        ),
+    },
+    {
+        "id": "daic_woz_moderate_003",
         "severity": "moderate",
         "text": (
-            "I've been feeling down for a while and I don't enjoy things as much as I used to. "
-            "I still go to classes and meet people, but it takes much more effort than before. "
-            "My sleep is inconsistent and I find it hard to focus sometimes, which makes me worry "
-            "that I am falling behind."
+            "Lately I’ve been feeling a bit off. I still go about my daily routine, but I don’t get the "
+            "same satisfaction from things I used to enjoy. My energy levels fluctuate, and I sometimes "
+            "struggle to stay focused. I feel more tired than usual."
         ),
     },
     {
-        "id": "daic_woz_moderate_002",
+        "id": "daic_woz_moderate_004",
         "severity": "moderate",
         "text": (
-            "Some days I feel okay, but many days I feel low and tired without a clear reason. "
-            "I am less motivated to do my routine activities, and I avoid social plans more often. "
-            "I can still manage my responsibilities, but everything feels heavier and slower than usual."
+            "I’ve noticed that I’m less motivated recently. I still complete my work, but it takes more "
+            "effort to get started. I occasionally avoid social situations and prefer to stay alone. "
+            "My sleep has been somewhat irregular, and I feel mentally drained at times."
+        ),
+    },
+    {
+        "id": "daic_woz_moderate_005",
+        "severity": "moderate",
+        "text": (
+            "Some days I feel productive, but other days I struggle to keep up. I feel a bit disconnected "
+            "from things I usually enjoy, and I tend to overthink small problems. My appetite and sleep "
+            "patterns are inconsistent, which makes it harder to stay energized."
+        ),
+    },
+    {
+        "id": "daic_woz_severe_003",
+        "severity": "severe",
+        "text": (
+            "I feel drained almost every day, both physically and mentally. It’s hard to get out of bed, "
+            "and I often skip responsibilities because I can’t find the energy. I avoid people and feel "
+            "like I don’t belong anywhere. My thoughts are mostly negative, and I feel stuck in this state."
+        ),
+    },
+    {
+        "id": "daic_woz_severe_004",
+        "severity": "severe",
+        "text": (
+            "Nothing feels meaningful anymore. I have lost interest in activities I once cared about, "
+            "and I isolate myself most of the time. My sleep is either too much or too little, and my "
+            "eating habits are poor. I constantly feel like I am not good enough."
+        ),
+    },
+    {
+        "id": "daic_woz_severe_005",
+        "severity": "severe",
+        "text": (
+            "I struggle to find motivation for even basic tasks. I feel empty and disconnected from "
+            "everything around me. I rarely talk to anyone and prefer to stay alone. I find it hard to "
+            "focus, and I feel like things will never improve."
+        ),
+    },
+    {
+        "id": "daic_woz_not_004",
+        "severity": "not_depressed",
+        "text": (
+            "I feel generally content with my life. I have a routine that works for me, and I enjoy my "
+            "activities and interactions. Even when I face challenges, I feel capable of dealing with them. "
+            "I sleep well and maintain a healthy appetite."
         ),
     },
 ]
@@ -260,6 +311,9 @@ async def _start_evaluation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     paragraph_text = selected_paragraph["text"]
     paragraph_severity = selected_paragraph["severity"]
 
+    await update.message.reply_text(_format_box("Evaluation Paragraph", paragraph_text))
+    await update.message.reply_text("Running evaluation pipeline...")
+
     eval_result = await _run_random_explanation(paragraph_text)
 
     context.user_data["eval_flow"] = {
@@ -277,7 +331,6 @@ async def _start_evaluation(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "prompt_message_id": None,
     }
 
-    await update.message.reply_text(_format_box("Evaluation Paragraph", paragraph_text))
     await safe_send(update, _format_box("Evaluation Explanation", eval_result["explanation"]))
 
     text = _evaluation_prompt(
@@ -336,6 +389,17 @@ def _extract_prediction_confidence(payload):
                 confidence = float(probs[idx])
             except Exception:
                 confidence = 0.0
+    elif hasattr(payload, "original_label"):
+        label = getattr(payload, "original_label", "unknown")
+        probs = getattr(payload, "original_probs", None)
+        if probs is not None:
+            from shared.depression_model import LABEL_MAP
+            label_to_idx = {v: k for k, v in LABEL_MAP.items()}
+            idx = label_to_idx.get(label)
+            try:
+                confidence = float(probs[idx]) if idx is not None else float(max(probs))
+            except Exception:
+                confidence = 0.0
     elif isinstance(payload, dict):
         label = str(payload.get("prediction", "unknown"))
         try:
@@ -371,6 +435,10 @@ async def run_shap_pipeline(update: Update, user_id: int, user_text: str):
     explain_with_shap, format_debug, generate_shap_explanation = _get_shap_pipeline()
     logger.info("UC1 SHAP for user %s", user_id)
 
+    paragraph_box = _format_box("1) Paragraph", user_text)
+    await update.message.reply_text(paragraph_box)
+    await update.message.reply_text("Running SHAP prediction...")
+
     shap_result = explain_with_shap(user_text)
     logger.info(format_debug(shap_result))
 
@@ -378,7 +446,6 @@ async def run_shap_pipeline(update: Update, user_id: int, user_text: str):
     confidence = shap_result.pred_probs[shap_result.pred_label_idx]
     top_word = shap_result.top_tokens[0]["token"] if shap_result.top_tokens else "—"
 
-    paragraph_box = _format_box("1) Paragraph", user_text)
     prediction_box = _format_box(
         "2) Prediction",
         _join_box_lines(
@@ -390,7 +457,6 @@ async def run_shap_pipeline(update: Update, user_id: int, user_text: str):
         ),
     )
 
-    await update.message.reply_text(paragraph_box)
     await update.message.reply_text(prediction_box)
 
     if shap_result.top_tokens:
@@ -416,6 +482,10 @@ async def run_rag_pipeline(update: Update, user_id: int, user_text: str):
     rag_pipeline, generate_rag_explanation, format_rag_debug = _get_rag_pipeline()
     logger.info("UC2 RAG for user %s", user_id)
 
+    paragraph_box = _format_box("1) Paragraph", user_text)
+    await update.message.reply_text(paragraph_box)
+    await update.message.reply_text("Running RAG prediction...")
+
     rag_result = rag_pipeline(user_text)
     logger.info(format_rag_debug(rag_result))
 
@@ -423,7 +493,6 @@ async def run_rag_pipeline(update: Update, user_id: int, user_text: str):
     confidence = rag_result.pred_probs[rag_result.pred_label_idx]
     symptoms = ", ".join(d.symptom_name for d in rag_result.retrieved_docs) or "n/a"
 
-    paragraph_box = _format_box("1) Paragraph", user_text)
     prediction_box = _format_box(
         "2) Prediction",
         _join_box_lines(
@@ -435,7 +504,6 @@ async def run_rag_pipeline(update: Update, user_id: int, user_text: str):
         ),
     )
 
-    await update.message.reply_text(paragraph_box)
     await update.message.reply_text(prediction_box)
 
     tool_lines = ["Retrieved clinical knowledge:"]
@@ -458,6 +526,9 @@ async def run_hybrid_pipeline_handler(update: Update, user_id: int, user_text: s
     run_hybrid, format_debug, format_preview, generate_explanation = _get_hybrid_pipeline()
     logger.info("UC3 Hybrid for user %s", user_id)
 
+    paragraph_box = _format_box("1) Paragraph", user_text)
+    await update.message.reply_text(paragraph_box)
+
     await update.message.reply_text(
         "Running all three XAI pipelines (SHAP + RAG + Counterfactual).\n"
         "This is the most comprehensive analysis — please allow 30-60 seconds..."
@@ -466,10 +537,8 @@ async def run_hybrid_pipeline_handler(update: Update, user_id: int, user_text: s
     result = run_hybrid(user_text)
     logger.info(format_debug(result))
 
-    paragraph_box = _format_box("1) Paragraph", user_text)
     prediction_box = _format_box("2) Prediction", format_preview(result))
 
-    await update.message.reply_text(paragraph_box)
     await update.message.reply_text(prediction_box)
 
     detail_lines = ["Detailed evidence from all three signals:"]
@@ -511,6 +580,9 @@ async def run_cf_pipeline(update: Update, user_id: int, user_text: str):
     generate_counterfactuals, format_cf_debug, generate_cf_explanation, format_cf_preview = _get_cf_pipeline()
     logger.info("UC4 CF for user %s", user_id)
 
+    paragraph_box = _format_box("1) Paragraph", user_text)
+    await update.message.reply_text(paragraph_box)
+
     await update.message.reply_text(
         "Generating counterfactuals (SHAP + multiple LLM calls).\n"
         "This may take 20-40 seconds..."
@@ -519,10 +591,8 @@ async def run_cf_pipeline(update: Update, user_id: int, user_text: str):
     result = generate_counterfactuals(user_text, n_candidates=3, n_attempts=2)
     logger.info(format_cf_debug(result))
 
-    paragraph_box = _format_box("1) Paragraph", user_text)
     prediction_box = _format_box("2) Prediction", format_cf_preview(result))
 
-    await update.message.reply_text(paragraph_box)
     await update.message.reply_text(prediction_box)
 
     if result.candidates:
@@ -549,6 +619,9 @@ async def run_mcp_pipeline_handler(update: Update, user_id: int, user_text: str)
     run_mcp_pipeline = _get_mcp_pipeline()
     logger.info("UC5 MCP for user %s", user_id)
 
+    paragraph_box = _format_box("1) Paragraph", user_text)
+    await update.message.reply_text(paragraph_box)
+
     await update.message.reply_text(
         "Running MCP modular pipeline.\n"
         "This may take a few seconds..."
@@ -564,7 +637,6 @@ async def run_mcp_pipeline_handler(update: Update, user_id: int, user_text: str)
     explanation = result.get("explanation", "No explanation returned.")
     errors = result.get("errors", []) or []
 
-    paragraph_box = _format_box("1) Paragraph", user_text)
     prediction_box = _format_box(
         "2) Prediction",
         _join_box_lines(
@@ -577,7 +649,6 @@ async def run_mcp_pipeline_handler(update: Update, user_id: int, user_text: str)
         ),
     )
 
-    await update.message.reply_text(paragraph_box)
     await update.message.reply_text(prediction_box)
 
     detail_lines = ["MCP decision details:"]
