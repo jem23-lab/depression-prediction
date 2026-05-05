@@ -155,7 +155,7 @@ USE_CASES = {
     "2": "RAG",
     "3": "HYBRID",
     "4": "COUNTERFACTUAL",
-    "5": "MCP",
+    # "5": "MCP",
 }
 
 EVAL_CRITERIA = [
@@ -289,7 +289,6 @@ async def _start_evaluation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sent = await update.message.reply_text(text)
     context.user_data["eval_flow"]["prompt_message_id"] = sent.message_id
 
-
 async def _run_random_explanation(user_text: str) -> dict:
     use_case = random.choice(list(USE_CASES.keys()))
 
@@ -309,10 +308,10 @@ async def _run_random_explanation(user_text: str) -> dict:
         generate_counterfactuals, _, generate_cf_explanation, _ = _get_cf_pipeline()
         model_result = generate_counterfactuals(user_text, n_candidates=3, n_attempts=2)
         explanation = generate_cf_explanation(user_text, model_result)
-    else:
-        run_mcp_pipeline = _get_mcp_pipeline()
-        model_result = run_mcp_pipeline(user_text)
-        explanation = model_result.get("explanation", "No explanation returned.")
+    # elif use_case == "5":
+    #     run_mcp_pipeline = _get_mcp_pipeline()
+    #     model_result = run_mcp_pipeline(user_text)
+    #     explanation = model_result.get("explanation", "No explanation returned.")
 
     pred_label, pred_conf = _extract_prediction_confidence(model_result)
     return {
