@@ -23,8 +23,7 @@ def build_shap_prompt(user_query: str, result: SHAPResult) -> str:
     # Risk tokens
     risk_lines = []
     for t in result.risk_tokens:
-        note = f"  <- {t['note']}" if t["note"] else ""
-        risk_lines.append(f"  '{t['token']}'{note}")
+        risk_lines.append(f"  '{t['token']}'")
     risk_block  = "\n".join(risk_lines) if risk_lines else "  None detected"
 
     # Protective tokens

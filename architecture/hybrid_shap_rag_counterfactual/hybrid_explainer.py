@@ -59,9 +59,8 @@ def build_hybrid_prompt(user_query: str, result: HybridResult) -> str:
         sr         = result.shap_result
         risk_lines = []
         for t in sr.risk_tokens[:5]:
-            note = f"  ({t['note']})" if t["note"] else ""
             risk_lines.append(
-                f"    '{t['token']}' SHAP={t['shap']:+.4f} — {t['direction']}{note}"
+                f"    '{t['token']}' SHAP={t['shap']:+.4f} — {t['direction']}"
             )
         prot_lines = [
             f"    '{t['token']}' SHAP={t['shap']:+.4f} — {t['direction']}"

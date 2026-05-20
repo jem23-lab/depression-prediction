@@ -35,10 +35,10 @@ from telegram.ext import (
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _ROOT)
 
-from shared.conversation     import process_message
-from shared.llm_client       import strip_markdown
+from shared.conversation import process_message
+from shared.llm_client import strip_markdown
 from shared.depression_model import load as preload_model
-from shared.eval_logger      import append_evaluation_row
+from shared.eval_logger import append_evaluation_row
 
 # ── Logging ──────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -50,7 +50,7 @@ logger = logging.getLogger("depression_bot")
 
 # ── Lazy pipeline importers ──────────────────────────────────────────
 def _get_shap_pipeline():
-    from shared.depression_model       import explain_with_shap, format_debug
+    from shared.depression_model import explain_with_shap, format_debug
     from architecture.shap_explainer.shap_explainer import generate_shap_explanation
     return explain_with_shap, format_debug, generate_shap_explanation
 
@@ -71,7 +71,8 @@ def _get_cf_pipeline():
 
 
 def _get_hybrid_pipeline():
-    from architecture.hybrid_shap_rag_counterfactual.hybrid_pipeline  import run_hybrid_pipeline, format_hybrid_debug, format_hybrid_telegram_preview
+    from architecture.hybrid_shap_rag_counterfactual.hybrid_pipeline import run_hybrid_pipeline, format_hybrid_debug, \
+        format_hybrid_telegram_preview
     from architecture.hybrid_shap_rag_counterfactual.hybrid_explainer import generate_hybrid_explanation
     return run_hybrid_pipeline, format_hybrid_debug, format_hybrid_telegram_preview, generate_hybrid_explanation
 
@@ -97,7 +98,6 @@ async def send_footer(update: Update):
     )
 
 
-
 def _format_box(title: str, body: str, width: int = 48) -> str:
     line = "=" * width
     divider = "-" * width
@@ -110,95 +110,253 @@ def _join_box_lines(lines: list) -> str:
 
 PARAGRAPHS = [
     {
-        "id": "daic_woz_not_001",
-        "severity": "not_depressed",
-        "text": (
-            "I generally feel okay day to day. I have some stress from classes and deadlines, "
-            "but I manage to stay on top of things. I enjoy spending time with friends and relaxing "
-            "when I can. My sleep is fairly regular, and I don’t usually have trouble concentrating."
-        ),
-    },
-    {
-        "id": "daic_woz_not_002",
-        "severity": "not_depressed",
-        "text": (
-            "Most days are pretty normal for me. I stay busy with work and hobbies, and I look forward "
-            "to socializing on weekends. I feel motivated to complete my tasks, and I don’t feel overly "
-            "burdened. My appetite and sleep are stable."
-        ),
-    },
-    {
-        "id": "daic_woz_not_003",
-        "severity": "not_depressed",
-        "text": (
-            "I feel balanced overall. There are occasional challenges, but I handle them without feeling "
-            "overwhelmed. I enjoy my daily routine and feel connected to people around me. I can focus "
-            "well and usually feel positive about my progress."
-        ),
-    },
-    {
-        "id": "daic_woz_moderate_003",
-        "severity": "moderate",
-        "text": (
-            "Lately I’ve been feeling a bit off. I still go about my daily routine, but I don’t get the "
-            "same satisfaction from things I used to enjoy. My energy levels fluctuate, and I sometimes "
-            "struggle to stay focused. I feel more tired than usual."
-        ),
-    },
-    {
-        "id": "daic_woz_moderate_004",
-        "severity": "moderate",
-        "text": (
-            "I’ve noticed that I’m less motivated recently. I still complete my work, but it takes more "
-            "effort to get started. I occasionally avoid social situations and prefer to stay alone. "
-            "My sleep has been somewhat irregular, and I feel mentally drained at times."
-        ),
-    },
-    {
-        "id": "daic_woz_moderate_005",
-        "severity": "moderate",
-        "text": (
-            "Some days I feel productive, but other days I struggle to keep up. I feel a bit disconnected "
-            "from things I usually enjoy, and I tend to overthink small problems. My appetite and sleep "
-            "patterns are inconsistent, which makes it harder to stay energized."
-        ),
-    },
-    {
-        "id": "daic_woz_severe_003",
+        "id": "daic_woz_severe_321",
         "severity": "severe",
         "text": (
-            "I feel drained almost every day, both physically and mentally. It’s hard to get out of bed, "
-            "and I often skip responsibilities because I can’t find the energy. I avoid people and feel "
-            "like I don’t belong anywhere. My thoughts are mostly negative, and I feel stuck in this state."
-        ),
+            "Lately, I’ve been feeling deeply depressed and weighed down by worries.My life feels"
+            "heavy; I had to settle for a retail job because I couldn't find work in my field,"
+            "and my daughter is currently battling cancer, leaving me frustrated and anxious. I"
+            "haven't had a good night's sleep in a year, waking up every few hours. This severe "
+            "fatigue leaves me groggy, lacking energy, and struggling to concentrate, causing me"
+            "to forget things and make mistakes at work. I’ve experienced a painful shift in my"
+            "social functioning and interests; I haven't gone out to dinner with a close friend "
+            "in over a year. My self-worth is low—I don't know my best qualities and regret my "
+            "lack of education— and my appetite is disrupted.Though I find moments of pure joy"
+            " playing with my granddaughter, I mostly feel trapped by sadness and failure, coping "
+            "by keeping quiet when struggling."
+        )
     },
     {
-        "id": "daic_woz_severe_004",
+        "id": "daic_woz_severe_346",
         "severity": "severe",
         "text": (
-            "Nothing feels meaningful anymore. I have lost interest in activities I once cared about, "
-            "and I isolate myself most of the time. My sleep is either too much or too little, and my "
-            "eating habits are poor. I constantly feel like I am not good enough."
-        ),
+            "Lately, I’ve been feeling really sad, stressed, and miserable, carrying a severe "
+            "heaviness from my past hardships and trauma. Sleeping is incredibly difficult; I "
+            "lie awake dwelling on stressors or wake up shaking from intense nighttime panic "
+            "attacks and vivid nightmares. This constant insomnia leaves me completely exhausted,"
+            " moody, and struggling with severe fatigue, poor concentration, and a disrupted "
+            "appetite. My self-worth is low—I often forget my good qualities, regret past choices"
+            " like my last marriage, and feel a deep sense of failure. Socially, my family can be "
+            "judgmental, and though I have a loving boyfriend, I struggle with an internal urge "
+            "to withdraw. I have to forcefully push myself to attend auditions or make it to "
+            "appointments because a part of me just wants to hide away. While I try to survive "
+            "and stay busy to avoid feeling that life isn't worth it, everything feels like an "
+            "agonizing struggle."
+        )
     },
     {
-        "id": "daic_woz_severe_005",
+        "id": "daic_woz_severe_348",
         "severity": "severe",
         "text": (
-            "I struggle to find motivation for even basic tasks. I feel empty and disconnected from "
-            "everything around me. I rarely talk to anyone and prefer to stay alone. I find it hard to "
-            "focus, and I feel like things will never improve."
-        ),
+            "Lately, I’ve been feeling so tired, sad, depressed, and blue. I was diagnosed"
+            " with depression about a year ago because I just couldn't pull myself out of it,"
+            " and right now, I’m simply not happy. My sleep is terrible—I barely sleep at all,"
+            " which leaves me feeling crazy, distracted, and struggling to cope with even mundane"
+            " daily things. This severe lack of motivation, energy, and low self-worth makes me "
+            "feel like I'm not my usual self. Even my appetite has been completely disrupted. "
+            "To cope, I’ve started staying to myself and withdrawing, not going out with friends "
+            "like I used to. My new relationship has lost its spark and just feels okay now, and "
+            "the cold weather easily brings me down. Although going to therapy helps me get "
+            "things off my chest, and I still feel proud and fulfilled by my children, everyday "
+            "life currently feels like an overwhelming weight."
+        )
     },
     {
-        "id": "daic_woz_not_004",
-        "severity": "not_depressed",
+        "id": "daic_woz_severe_362",
+        "severity": "severe",
         "text": (
-            "I feel generally content with my life. I have a routine that works for me, and I enjoy my "
-            "activities and interactions. Even when I face challenges, I feel capable of dealing with them. "
-            "I sleep well and maintain a healthy appetite."
-        ),
+            "Lately, I’ve been feeling so-so, run down, and a bit stressed, struggling with"
+            " ongoing depression, lack of interest, and too many regrets weighing on my mind. "
+            "Sleep is never easy and always bad, leaving me tired, lethargic, and without energy."
+            " It makes it incredibly hard to keep my thoughts in order or manage the absolute "
+            "basics of my day. My appetite has also been severely disrupted. Because of my past"
+            " trauma from a near-fatal stalker attack, I find myself battling complex cognitive"
+            " and emotional patterns. To cope, I actively use the proactive tools from therapy "
+            "and reach out to others rather than isolating myself. While I try to stay rational,"
+            " calm, and reliable, I can't even remember the last time I felt genuinely happy. "
+            "Despite these severe struggles with self-worth and exhaustion, my children remain "
+            "my greatest pride, and working with animals still brings a brief smile to my face."
+        )
     },
+    {
+        "id": "daic_woz_severe_367",
+        "severity": "severe",
+        "text": (
+            "Lately, I feel pensive and down, carrying a heavy sense of hopelessness, severe "
+            "depression, and a total loss of interest in life. Since losing my job and moving "
+            "to LA, I feel like a complete failure who can't get back on my feet, leading to "
+            "estrangement from my family and friends. I constantly dwell on past mistakes, "
+            "especially a failed relationship that spiraled out of control, directing my anger"
+            " inward with intense guilt. My mind is always overwhelmed; everything triggers "
+            "painful memories, forcing me to double-task to keep my brain occupied, though "
+            "concentrating remains extremely difficult. Physically, I am plagued by light, "
+            "restless sleep, low energy, and appetite issues. To cope with this emotional "
+            "instability and stay sober, I attend AA meetings to put my formless pain into "
+            "words. I wonder if I'll ever feel like a normal, happy person again, remembering"
+            " a Christmas years ago when life felt whole."
+        )
+    },
+    {
+        "id": "daic_woz_severe_426",
+        "severity": "severe",
+        "text": (
+            "Lately, I’ve been feeling not good at all, carrying a deep sense of depression "
+            "and hopelessness. Since being released from prison, I feel older, overwhelmed by "
+            "responsibilities, and like my life isn't where it's supposed to be, which leaves "
+            "me struggling with self-worth and feeling sorry for myself. Sleep is never easy, "
+            "and I am plagued by severe restlessness, severe low energy, and appetite disruption."
+            " My concentration is impaired, making it hard to focus, yet I remain fully "
+            "determined not to give up. Because of past traumas and my PTSD diagnosis, "
+            "I sometimes experience intense emotional instability and flashbacks of past "
+            "violence, fights, and shootouts that inhibit me. To cope, I actively rely on"
+            " therapy, which teaches me to step back and rationally assess situations instead "
+            "of reacting purely on emotion. Although I still enjoy music and social gatherings, "
+            "true happiness feels far away, anchored in memories of mutual love."
+        )
+    },
+    {
+        "id": "daic_woz_severe_440",
+        "severity": "severe",
+        "text": (
+            "Lately, I’ve been feeling very stressed, moody, and irritable, with my mind "
+            "constantly jumping from one thought to another, making concentration incredibly "
+            "difficult. My son’s incarceration has been a devastating stressor, leaving me "
+            "feeling deeply depressed and hopeless. Between worrying about my children and "
+            "having racing thoughts, getting a good night’s sleep is nearly impossible, leaving"
+            " me completely exhausted with very low energy. My appetite is significantly disrupted, "
+            "and I struggle with feelings of failure and self-worth regarding marital arguments "
+            "and parenting mistakes. Despite being naturally outgoing, I tend to withdraw and avoid "
+            "talking entirely when upset, hiding my emotions. To cope and relax, I design jewelry. "
+            "Though I heavily relied on therapy, losing my therapist due to funding cuts has left me "
+            "to navigate this emotional instability completely alone. I try to remain a compassionate "
+            "go-getter for my family, but right now, finding genuine happiness is a real struggle."
+        )
+    },
+    {
+        "id": "daic_woz_moderate_319",
+        "severity": "moderate",
+        "text": (
+            "Lately, I’ve been feeling down and not like myself, struggling with a "
+            "persistent sense of lethargy and low energy that often leaves me lying "
+            "around. Since being diagnosed with depression a year ago, I face a regular "
+            "loss of interest in activities, though watching USC football can still lift "
+            "my spirits. My sleep is frequently disrupted, leaving me irritable and cranky, "
+            "and I notice regular appetite changes. Almost daily, I face severe concentration "
+            "difficulties. As an honest, straightforward person, I try to remove myself from "
+            "annoying situations, but I carry many regrets about my past and a subtle sense of "
+            "failure. Being currently unemployed and facing health and financial limitations has "
+            "heavily restricted my life, and after recently losing my father—my last living "
+            "parent—it’s been a long time since I felt truly happy. I remain deeply proud of my "
+            "four adult children, though I constantly worry about them."
+        )
+    },
+    {
+        "id": "daic_woz_moderate_330",
+        "severity": "moderate",
+        "text": (
+            "I describe myself as an introverted, patient, and curious student pursuing "
+            "biological sciences. While I often tell others I’m doing well, I frequently feel"
+            " down and overwhelmed by the daunting challenges ahead, and I am honestly not sure "
+            "when I last felt truly happy. Privately, I struggle almost daily with severe "
+            "feelings of failure, self-worth issues, and significant appetite changes. My "
+            "concentration remains unaffected, but more than half the time, I experience a "
+            "noticeable sense of restlessness or physical slowing. I also cope with occasional "
+            "low energy, a mild loss of interest, and difficulty falling asleep, which leaves me "
+            "feeling nervous and forgetful. Being an introvert, I handle these burdens by "
+            "withdrawing into solitary coping behaviors like reading, listening to music, and "
+            "taking night walks. Although I am proud of my academic achievements and have a "
+            "supportive mentor, navigating these hidden emotional struggles feels very hard."
+        )
+    },
+    {
+        "id": "daic_woz_moderate_335",
+        "severity": "moderate",
+        "text": (
+            "As an extroverted and creative actor, I’m usually an open book, but moving back "
+            "to Los Angeles against my will to care for my sick father has been incredibly "
+            "stressful, especially living with him and my brother in a hoarding environment. "
+            "Lately, this situation has manifested in distressing, out-of-control stress dreams "
+            "nearly every day, alongside severe, near-daily appetite disruptions. More than half "
+            "the time, I contend with persistent fatigue and low energy, which weighs heavily "
+            "on me. On several days, I find myself feeling down and mildly hopeless about my "
+            "father's illness, struggling with intermittent concentration difficulties and a "
+            "slight loss of interest in my regular activities. I also experience occasional "
+            "self-worth issues, particularly with voicing my needs and standing up for myself. "
+            "Despite these compounding emotional and environmental burdens, I strive to stay "
+            "resilient, drawing strength from my talents, close friendships, and my natural "
+            "ability to make the best of bad situations."
+        )
+    },
+    {
+        "id": "daic_woz_moderate_372",
+        "severity": "moderate",
+        "text": (
+            "I am currently feeling pretty down and finding "
+            "everything bittersweet. Ever since losing custody of my son, I struggle nearly "
+            "every day with overwhelming feelings of failure and self-worth issues, feeling "
+            "completely invisible and unacknowledged as a mother. I cry constantly, including at "
+            "family events and in weekly therapy sessions. My small home environment is "
+            "incredibly crowded and stressful, leading to frequent arguments with my husband, who "
+            "is disappointed that I’ve lost my usual optimistic, fun spark. More than half the "
+            "time, racing thoughts disrupt my sleep, forcing me to rely on medication, and I "
+            "contend with a shortened attention span that impairs my concentration and a general "
+            "loss of interest in life. I also experience occasional fatigue and appetite changes. "
+            "Having no close friends further contributes to my social isolation. However, I "
+            "remain dedicated to self-improvement; I take antidepressants, seek employment, and "
+            "attend local literary events to fuel my dream of writing."
+        )
+    },
+    {
+        "id": "daic_woz_moderate_376",
+        "severity": "moderate",
+        "text": (
+            "I am currently experiencing moderate depression, a condition I’ve managed with "
+            "psychiatric medication for years, but I’m deeply struggling after the recent deaths "
+            "of my mother and uncle. For more than half the days, I endure a pervasive loss of "
+            "interest in activities I once loved, like reading or shopping, and frequently feel "
+            "down and hopeless. My mind constantly runs on overtime, making me feel "
+            "scatterbrained and causing severe concentration difficulties. This mental strain "
+            "disrupts my sleep; I struggle to stay asleep, often getting only three to four hours"
+            " a night. Consequently, I face persistent fatigue, low energy, and appetite issues, "
+            "leading to emotional overeating. Although insurance barriers prevent me from seeing "
+            "a therapist and I get irritated easily, I maintain confidence in my reliability and "
+            "strong work ethic. I am actively trying to cope by keeping my mind busy, dieting, "
+            "and walking along the beach."
+        )
+    },
+    {
+        "id": "daic_woz_moderate_412",
+        "severity": "moderate",
+        "text": (
+            "I am noticing that my thoughts have been just not as positive lately, and I've "
+            "been feeling pretty tired. My mind runs on overdrive, causing me to toss and turn "
+            "all night while worrying about work, the economy, and what the future holds. "
+            "Because of this, it often feels like a struggle just to get through the day. I "
+            "find myself overeating quite a bit, which has changed my weight since I moved to "
+            "Los Angeles from Texas for work. It is also hard to stay as focused as I used to be, "
+            "and I feel a bit scatterbrained. Despite being naturally shy and keeping a low "
+            "amount of contact with my remaining family, I actively try to cope by keeping my "
+            "mind busy. I find genuine relaxation and a sense of relief by going to meetup groups, "
+            "making new friends, and going out Latin dancing several times a week."
+        )
+    },
+    {
+        "id": "daic_woz_moderate_422",
+        "severity": "moderate",
+        "text": (
+            "Lately, I feel physically crappy and down a lot of the time, which feels reasonable"
+            " given my difficult health problems. Nearly every day, I experience severe fatigue, "
+            "feeling as though I haven't slept for two days. Even though I sleep a lot, I never "
+            "feel truly rested, and any moments of alertness are short-lived. As a deep thinker, "
+            "my mind is constantly active, and I struggle with the realistic limitations my "
+            "health places on my dream of becoming a veterinarian. Socially, I am a private "
+            "person on the cusp between shy and outgoing. I intentionally withhold my "
+            "difficulties from friends so I don't become a killjoy or make them uncomfortable. "
+            "Despite these stressors and my regret over not finding a long-term life partner now "
+            "that I am forty, I remain highly motivated. I am proud that I have persevered on my "
+            "own, returning to school to complete my education and earning straight A’s."
+        )
+    }
 ]
 
 USE_CASES = {
@@ -219,7 +377,7 @@ EVAL_CRITERIA = [
 # ── Central message handler ──────────────────────────────────────────
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    text    = (update.message.text or "").strip()
+    text = (update.message.text or "").strip()
     logger.info("User %s: %s", user_id, text[:80])
 
     if await _handle_rating(update, context):
@@ -342,6 +500,7 @@ async def _start_evaluation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sent = await update.message.reply_text(text)
     context.user_data["eval_flow"]["prompt_message_id"] = sent.message_id
 
+
 async def _run_random_explanation(user_text: str) -> dict:
     use_case = random.choice(list(USE_CASES.keys()))
 
@@ -451,7 +610,7 @@ async def run_shap_pipeline(update: Update, user_id: int, user_text: str):
         _join_box_lines(
             [
                 f"Level: {label}",
-                f"Confidence: {confidence*100:.1f}%",
+                f"Confidence: {confidence * 100:.1f}%",
                 f"Key word: {top_word}",
             ]
         ),
@@ -498,7 +657,7 @@ async def run_rag_pipeline(update: Update, user_id: int, user_text: str):
         _join_box_lines(
             [
                 f"Level: {label}",
-                f"Confidence: {confidence*100:.1f}%",
+                f"Confidence: {confidence * 100:.1f}%",
                 f"Matched symptoms: {symptoms}",
             ]
         ),
@@ -642,7 +801,7 @@ async def run_mcp_pipeline_handler(update: Update, user_id: int, user_text: str)
         _join_box_lines(
             [
                 f"Level: {label}",
-                f"Confidence: {confidence*100:.1f}%",
+                f"Confidence: {confidence * 100:.1f}%",
                 f"Selected server: {selected_server}",
                 f"Fallback used: {'yes' if fallback_used else 'no'}",
             ]

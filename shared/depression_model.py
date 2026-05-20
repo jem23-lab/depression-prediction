@@ -16,9 +16,8 @@ CALIBRATED SEVERITY :
 
 Exposes:
     predict_proba(texts)        → np.ndarray (n, 3)
-    classify_severity(probs)    → (label, severity_score, reason)
+    classify_severity(probs, text=None)    → (label, severity_score, reason)
     explain_with_shap(text)     → SHAPResult
-    SUICIDAL_IDEATION_PATTERNS  → for crisis detection in bot.py
 """
 
 import re
@@ -27,7 +26,7 @@ import numpy as np
 import torch
 import shap
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 logger = logging.getLogger(__name__)
@@ -38,13 +37,13 @@ DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Canonical label map assumed from the model card.
 # load() validates this against _model.config.id2label and corrects if needed.
-LABEL_MAP = {0: "severe", 1: "moderate", 2: "not depression"}
+LABEL_MAP: dict = {}
 
-LABEL_DESCRIPTIONS = {
-    "severe":         "Strong indicators of severe depression — persistent hopelessness, emptiness, or inability to function.",
-    "moderate":       "Signs of moderate depression — low mood, fatigue, and reduced interest in life.",
-    "not depression": "No significant depression signals detected at this time.",
-}
+# Optional label descriptions; left empty to avoid hardcoding labels.
+LABEL_DESCRIPTIONS: dict = {}
+
+# Resolved index → label map (updated at load time).
+_idx_to_label: dict = {}
 
 # ── Calibrated severity thresholds ────────────────────────────────────
 # If severe probability reaches this level even when moderate has higher prob,
@@ -59,43 +58,19 @@ SEVERITY_WEIGHTS = {"severe": 1.0, "moderate": 0.5, "not depression": 0.0}
 
 # ── Per-class probability indices (resolved at load time) ─────────────
 # These may differ from LABEL_MAP keys if the model's id2label order differs.
-_severe_idx   = 0
-_moderate_idx = 1
-_nodep_idx    = 2
-
-# ── Crisis / suicidal ideation patterns (used by bot.py) ─────────────
-# These patterns detect when the bot must show crisis resources FIRST.
-# We keep detection here so it stays in sync with the model wrapper.
-SUICIDAL_IDEATION_PATTERNS = [
-    r"fall asleep forever",
-    r"sleep forever",
-    r"never wake up",
-    r"don'?t want to (?:be here|exist|live|wake up|go on)",
-    r"want(?:ing)? to disappear",
-    r"end(?:ing)? it (?:all|myself)",
-    r"no reason to (?:live|go on|continue|exist)",
-    r"better off (?:dead|without me|gone)",
-    r"can'?t (?:go on|take it anymore|do this anymore)",
-    r"want(?:ing)? to (?:die|kill myself|end my life)",
-    r"thoughts? of (?:suicide|ending|death)",
-    r"(?:lost|losing) the will to (?:live|go on)",
-]
-
-
-def is_crisis_text(text: str) -> bool:
-    """Returns True if text contains suicidal ideation or crisis signals."""
-    tl = text.lower()
-    return any(re.search(p, tl) for p in SUICIDAL_IDEATION_PATTERNS)
+_severe_idx: Optional[int] = None
+_moderate_idx: Optional[int] = None
+_nodep_idx: Optional[int] = None
 
 
 # ── Calibrated severity classifier ────────────────────────────────────
-def classify_severity(probs: np.ndarray) -> Tuple[str, float, str]:
+def classify_severity(probs: np.ndarray, text: Optional[str] = None) -> Tuple[str, float, str]:
     """
     Returns (label, severity_score, reason) from raw model probabilities.
 
-    Uses _severe_idx / _moderate_idx / _nodep_idx resolved at load() from
-    the model's actual id2label, so the correct probability column is always
-    used for each class regardless of the model's internal label ordering.
+    Uses indices resolved at load() from the model's actual id2label, so the
+    correct probability column is always used for each class regardless of
+    the model's internal label ordering.
 
     Escalation logic: if the severe-class probability reaches
     SEVERE_ESCALATION_THRESHOLD even when moderate has the highest raw
@@ -107,6 +82,16 @@ def classify_severity(probs: np.ndarray) -> Tuple[str, float, str]:
     severity_score: 0.0 (none) → 1.0 (severe), continuous.
     reason: human-readable string explaining the classification decision.
     """
+    if not _idx_to_label:
+        load()
+
+    argmax_idx = int(np.argmax(probs))
+    argmax_label = _idx_to_label.get(argmax_idx, "unknown")
+
+    if _severe_idx is None or _moderate_idx is None or _nodep_idx is None:
+        reason = "Label indices unresolved; using argmax prediction"
+        return argmax_label, float(probs[argmax_idx]), reason
+
     severe_prob   = float(probs[_severe_idx])
     moderate_prob = float(probs[_moderate_idx])
     nodep_prob    = float(probs[_nodep_idx])
@@ -115,9 +100,6 @@ def classify_severity(probs: np.ndarray) -> Tuple[str, float, str]:
     score = (severe_prob   * SEVERITY_WEIGHTS["severe"]
              + moderate_prob * SEVERITY_WEIGHTS["moderate"]
              + nodep_prob    * SEVERITY_WEIGHTS["not depression"])
-
-    argmax_idx   = int(np.argmax(probs))
-    argmax_label = LABEL_MAP[argmax_idx]
 
     # Escalate to severe if severe_prob is clinically meaningful
     if severe_prob >= SEVERE_ESCALATION_THRESHOLD:
@@ -128,40 +110,9 @@ def classify_severity(probs: np.ndarray) -> Tuple[str, float, str]:
         )
     else:
         label  = argmax_label
-        reason = f"Argmax prediction (severe={severe_prob:.1%}, moderate={moderate_prob:.1%})"
+        reason = f"Argmax prediction (severe={severe_prob:.1%}, moderate={moderate_prob:.1%}, not_dep={nodep_prob:.1%})"
 
     return label, round(score, 4), reason
-
-
-# ── Token-level annotations for SHAP ─────────────────────────────────
-CLINICAL_TOKEN_NOTES = {
-    "hopeless":    "strongly linked to depressive hopelessness",
-    "hopelessness":"core depression symptom",
-    "empty":       "emotional numbness — a hallmark of depression",
-    "tired":       "persistent fatigue is a core depression symptom",
-    "exhausted":   "severe fatigue signal",
-    "worthless":   "key clinical indicator of low self-worth",
-    "nothing":     "anhedonia and nihilism pattern",
-    "anymore":     "implies loss of a previous positive state",
-    "forever":     "passive suicidal ideation — wanting to cease existing",
-    "death":       "may indicate passive suicidal ideation",
-    "die":         "active suicidal ideation — requires clinical attention",
-    "suicide":     "requires immediate clinical attention",
-    "disappear":   "passive suicidal ideation signal",
-    "burden":      "perceived burdensomeness — strong predictor of severe depression",
-    "sad":         "direct expression of low mood",
-    "lonely":      "social withdrawal and isolation signal",
-    "cry":         "frequent crying is a depression marker",
-    "sleep":       "sleep disturbance is a core symptom",
-    "numb":        "emotional blunting associated with depression",
-    "concentrate": "concentration difficulty — cognitive depression symptom",
-    "appetite":    "appetite change — somatic depression symptom",
-    "unbearable":  "severe subjective distress marker",
-    "bad":         "subjective suffering — intensity depends on context",
-    "worse":       "worsening trajectory — severity escalation signal",
-    "meaningless": "loss of meaning — existential symptom of depression",
-    "pointless":   "hopelessness and nihilism pattern",
-}
 
 
 # ── Singletons ────────────────────────────────────────────────────────
@@ -173,6 +124,7 @@ _explainer = None
 def load():
     global _tokenizer, _model, _explainer
     global _severe_idx, _moderate_idx, _nodep_idx
+    global LABEL_MAP, _idx_to_label
     if _model is not None:
         return
     print(f"Loading {MODEL_NAME} on {DEVICE} …")
@@ -182,10 +134,14 @@ def load():
     _model.eval()
     print(f"Model loaded. Labels: {_model.config.id2label}")
 
-    # ── Resolve per-class probability indices from the model's id2label ──
-    # The model's label strings may use different casing or wording than
-    # LABEL_MAP.  We normalise both sides and find which output column
-    # corresponds to "severe", "moderate", and "not depression".
+    try:
+        LABEL_MAP = {int(k): str(v) for k, v in _model.config.id2label.items()}
+        _idx_to_label = dict(LABEL_MAP)
+    except (ValueError, TypeError) as exc:
+        logger.warning("Could not parse model id2label keys as integers (%s).", exc)
+        LABEL_MAP = {}
+        _idx_to_label = {}
+
     def _canonical(s: str) -> str:
         s = s.lower().strip()
         if s.startswith("not ") or s in ("no depression", "not depression", "none"):
@@ -196,21 +152,9 @@ def load():
             return "severe"
         return s
 
-    try:
-        model_labels = {int(k): _canonical(v)
-                        for k, v in _model.config.id2label.items()}
-    except (ValueError, TypeError) as exc:
-        logger.warning(
-            "Could not parse model id2label keys as integers (%s). "
-            "Falling back to assumed order: severe=0, moderate=1, not_dep=2.",
-            exc,
-        )
-        model_labels = {}
-
-    resolved_severe   = None
-    resolved_moderate = None
-    resolved_nodep    = None
-    for idx, canon in model_labels.items():
+    resolved_severe = resolved_moderate = resolved_nodep = None
+    for idx, raw in LABEL_MAP.items():
+        canon = _canonical(raw)
         if canon == "severe":
             resolved_severe = idx
         elif canon == "moderate":
@@ -218,35 +162,28 @@ def load():
         elif canon == "not depression":
             resolved_nodep = idx
 
-    if None in (resolved_severe, resolved_moderate, resolved_nodep):
+    _severe_idx = resolved_severe
+    _moderate_idx = resolved_moderate
+    _nodep_idx = resolved_nodep
+
+    if None in (_severe_idx, _moderate_idx, _nodep_idx):
         logger.warning(
             "Could not fully resolve label indices from model id2label=%s. "
-            "Falling back to assumed order: severe=0, moderate=1, not_dep=2. "
-            "Raw model labels: %s",
+            "Using argmax without escalation.",
             dict(_model.config.id2label),
-            model_labels,
         )
     else:
-        _severe_idx   = resolved_severe
-        _moderate_idx = resolved_moderate
-        _nodep_idx    = resolved_nodep
-        if (_severe_idx, _moderate_idx, _nodep_idx) != (0, 1, 2):
-            logger.warning(
-                "Model id2label order differs from assumed LABEL_MAP. "
-                "Corrected indices — severe=%d, moderate=%d, not_dep=%d",
-                _severe_idx, _moderate_idx, _nodep_idx,
-            )
-        else:
-            logger.info(
-                "Label indices confirmed: severe=%d, moderate=%d, not_dep=%d",
-                _severe_idx, _moderate_idx, _nodep_idx,
-            )
+        logger.info(
+            "Label indices resolved — severe=%d, moderate=%d, not_dep=%d",
+            _severe_idx, _moderate_idx, _nodep_idx,
+        )
 
     print("Initialising SHAP explainer …")
+    output_names = [_idx_to_label[i] for i in sorted(_idx_to_label.keys())]
     _explainer = shap.Explainer(
         lambda texts: predict_proba(list(texts)),
         _tokenizer,
-        output_names=list(LABEL_MAP.values()),
+        output_names=output_names,
     )
     print("SHAP ready.")
 
@@ -299,7 +236,7 @@ def explain_with_shap(text: str, top_n: int = 8) -> SHAPResult:
 
     # Raw probabilities → calibrated label
     pred_probs                 = predict_proba([text])[0]
-    pred_label, score, reason  = classify_severity(pred_probs)
+    pred_label, score, reason  = classify_severity(pred_probs, text=text)
     pred_label_idx             = int(np.argmax(pred_probs))  # for SHAP column selection
 
     # SHAP values for the argmax column (the model's strongest signal)
@@ -311,13 +248,11 @@ def explain_with_shap(text: str, top_n: int = 8) -> SHAPResult:
         if not clean or clean in ("", "▁"):
             continue
         key  = clean.lower().strip(".,!?'\"")
-        note = CLINICAL_TOKEN_NOTES.get(key, "")
         records.append({
             "token":     clean,
             "shap":      float(sv),
             "abs_shap":  abs(float(sv)),
             "direction": "↑ increases risk" if sv > 0 else "↓ reduces risk",
-            "note":      note,
         })
     records.sort(key=lambda x: x["abs_shap"], reverse=True)
 
@@ -337,7 +272,7 @@ def explain_with_shap(text: str, top_n: int = 8) -> SHAPResult:
 
 
 def format_debug(result: SHAPResult) -> str:
-    probs = ", ".join(f"{LABEL_MAP[i]}={result.pred_probs[i]:.3f}" for i in range(3))
+    probs = ", ".join(f"{_idx_to_label[i]}={result.pred_probs[i]:.3f}" for i in range(3))
     lines = [
         f"Prediction : {result.pred_label} (score={result.severity_score:.3f})",
         f"Raw probs  : {probs}",

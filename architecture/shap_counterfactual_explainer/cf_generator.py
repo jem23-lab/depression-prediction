@@ -49,7 +49,7 @@ logger = logging.getLogger("cf_generator")
 CF_TARGET_MAP = {
     "severe":         "moderate",
     "moderate":       "not depression",
-    "not depression": "not depression",
+    "not depression": "moderate",
 }
 
 # ── Recovery hints keyed to common depression tokens ─────────────────
