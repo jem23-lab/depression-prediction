@@ -60,6 +60,14 @@ export GOOGLE_API_KEY="your_key"
 python bot.py
 ```
 
+## Simple model demo
+
+The lightweight TF-IDF model trains from `shared/training_examples.py` at runtime.
+
+```bash
+python scripts/run_simple_model_demo.py
+```
+
 ## Bot flow (current)
 
 The bot is evaluation-first (no menu). When the user sends `/assess`:
