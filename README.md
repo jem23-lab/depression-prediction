@@ -62,7 +62,8 @@ python bot.py
 
 ## Simple model demo
 
-The lightweight TF-IDF model trains from `shared/training_examples.py` at runtime.
+The lightweight TF-IDF model trains from `shared/training_examples.py` at runtime and
+caches a persisted copy in `shared/model_cache/` for faster startup on subsequent runs.
 
 ```bash
 python scripts/run_simple_model_demo.py

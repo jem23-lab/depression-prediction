@@ -1,9 +1,9 @@
 """
-shared/depression_model copy.py
+shared/depression_model.py
 ────────────────────────────────────────────────────────────────────
 Lightweight model wrapper used by ALL use cases (SHAP, RAG, hybrid, etc.)
 
-Model : TF-IDF + LogisticRegression trained from local examples
+Model : TF-IDF centroid similarity trained from local examples
 Labels: derived from training examples at load() time (no hardcoded order)
 
 Exposes:
@@ -16,10 +16,16 @@ import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
+import hashlib
+import json
+import os
+import re
 
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.preprocessing import normalize
 from sklearn.linear_model import LogisticRegression
+import joblib
 
 from shared.training_examples import PARAGRAPHS as TRAINING_EXAMPLES
 
@@ -33,6 +39,12 @@ _label_to_idx: dict = {}
 
 _vectorizer: Optional[TfidfVectorizer] = None
 _classifier: Optional[LogisticRegression] = None
+_train_matrix: Optional[np.ndarray] = None
+_centroids: Optional[np.ndarray] = None
+_centroid_diffs: Optional[np.ndarray] = None
+
+_CACHE_DIR = os.path.join(os.path.dirname(__file__), "model_cache")
+_MODEL_PATH = os.path.join(_CACHE_DIR, "depression_tfidf_lr.joblib")
 
 
 def _normalize_label(label: str) -> str:
@@ -94,12 +106,82 @@ def classify_severity(probs: np.ndarray, text: Optional[str] = None) -> Tuple[st
     return argmax_label, round(score, 4), reason
 
 
+def _training_fingerprint(rows: List[dict]) -> str:
+    items = []
+    for row in rows:
+        text = (row.get("text") or "").strip()
+        label = _normalize_label(row.get("severity") or row.get("label") or "")
+        items.append({"label": label, "text": text})
+    payload = json.dumps(items, sort_keys=True, ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _load_cached_model(fingerprint: str) -> bool:
+    global _vectorizer, _classifier
+    global LABEL_MAP, _idx_to_label, _label_to_idx
+    global _train_matrix, _centroids, _centroid_diffs
+
+    if not os.path.exists(_MODEL_PATH):
+        return False
+
+    try:
+        data = joblib.load(_MODEL_PATH)
+    except Exception as exc:
+        logger.warning("Failed to load cached model: %s", exc)
+        return False
+
+    if data.get("fingerprint") != fingerprint:
+        return False
+
+    _vectorizer = data.get("vectorizer")
+    _classifier = data.get("classifier")
+    _idx_to_label = data.get("idx_to_label") or {}
+    _label_to_idx = data.get("label_to_idx") or {}
+    _train_matrix = data.get("train_matrix")
+    _centroids = data.get("centroids")
+    _centroid_diffs = data.get("centroid_diffs")
+    LABEL_MAP = dict(_idx_to_label)
+
+    if _vectorizer is None or not _idx_to_label:
+        return False
+    if _centroids is None or _centroid_diffs is None:
+        return False
+
+    logger.info("Loaded cached model from %s", _MODEL_PATH)
+    return True
+
+
+def _save_model(fingerprint: str) -> None:
+    if _vectorizer is None or not _idx_to_label:
+        return
+    if _centroids is None or _centroid_diffs is None:
+        return
+
+    os.makedirs(_CACHE_DIR, exist_ok=True)
+    payload = {
+        "fingerprint": fingerprint,
+        "vectorizer": _vectorizer,
+        "classifier": _classifier,
+        "idx_to_label": _idx_to_label,
+        "label_to_idx": _label_to_idx,
+        "train_matrix": _train_matrix,
+        "centroids": _centroids,
+        "centroid_diffs": _centroid_diffs,
+    }
+    joblib.dump(payload, _MODEL_PATH)
+
+
 # ── Singletons ────────────────────────────────────────────────────────
 def load():
     global _vectorizer, _classifier
     global LABEL_MAP, _idx_to_label, _label_to_idx
+    global _train_matrix, _centroids, _centroid_diffs
 
-    if _classifier is not None:
+    if _vectorizer is not None and _centroids is not None:
+        return
+
+    fingerprint = _training_fingerprint(TRAINING_EXAMPLES)
+    if _load_cached_model(fingerprint):
         return
 
     texts: List[str] = []
@@ -123,25 +205,52 @@ def load():
     _vectorizer = TfidfVectorizer(
         lowercase=True,
         stop_words="english",
-        ngram_range=(1, 1),
+        ngram_range=(1, 2),
+        min_df=1,
     )
-    _classifier = LogisticRegression(max_iter=1000)
 
-    x_train = _vectorizer.fit_transform(texts)
-    y_train = np.array([_label_to_idx[lbl] for lbl in labels])
-    _classifier.fit(x_train, y_train)
+    train_matrix = _vectorizer.fit_transform(texts)
+    _train_matrix = train_matrix
+
+    num_labels = len(_idx_to_label)
+    centroids = []
+    for label_idx in range(num_labels):
+        mask = np.array([_label_to_idx[lbl] == label_idx for lbl in labels])
+        if not mask.any():
+            centroid = np.zeros((train_matrix.shape[1],), dtype=float)
+        else:
+            centroid = train_matrix[mask].mean(axis=0)
+            centroid = np.asarray(centroid).ravel()
+        centroids.append(centroid)
+
+    _centroids = np.vstack(centroids)
+    overall = _centroids.mean(axis=0)
+    _centroid_diffs = _centroids - overall
+
+    _save_model(fingerprint)
 
     logger.info("Simple model trained on %d examples. Labels: %s", len(texts), _idx_to_label)
 
 
 def predict_proba(texts: List[str]) -> np.ndarray:
     """
-    Returns raw softmax probabilities shape (n, k).
+    Returns similarity-based probabilities shape (n, k).
     Column order matches the label set derived in load().
     """
     load()
     vectors = _vectorizer.transform(texts)
-    probs = _classifier.predict_proba(vectors)
+    vectors = normalize(vectors, norm="l2", axis=1)
+    centroids = normalize(_centroids, norm="l2", axis=1)
+
+    sims = vectors.dot(centroids.T)
+    sims = np.asarray(sims)
+    if sims.size == 0:
+        return np.zeros((len(texts), len(_idx_to_label)), dtype=float)
+
+    sims = np.maximum(sims, 0.0)
+    row_sums = sims.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0.0] = 1.0
+    probs = sims / row_sums
     return np.asarray(probs, dtype=float)
 
 
@@ -162,7 +271,7 @@ class SHAPResult:
 
 
 def _token_contributions(text: str) -> Tuple[List[str], np.ndarray]:
-    """Compute SHAP-like per-token contributions for a linear model."""
+    """Compute SHAP-like per-token contributions from centroid differences."""
     load()
 
     analyzer = _vectorizer.build_analyzer()
@@ -173,10 +282,6 @@ def _token_contributions(text: str) -> Tuple[List[str], np.ndarray]:
 
     vector = _vectorizer.transform([text])
     token_counts = Counter(tokens)
-
-    coefs = _classifier.coef_
-    if coefs.shape[0] == 1 and num_labels == 2:
-        coefs = np.vstack([-coefs[0], coefs[0]])
 
     shap_matrix = np.zeros((len(tokens), num_labels), dtype=float)
 
@@ -193,10 +298,57 @@ def _token_contributions(text: str) -> Tuple[List[str], np.ndarray]:
         if tfidf_val == 0.0:
             continue
         per_occurrence = tfidf_val / token_counts[token]
-        for class_idx in range(min(num_labels, coefs.shape[0])):
-            shap_matrix[i, class_idx] = per_occurrence * float(coefs[class_idx, idx])
+        for class_idx in range(num_labels):
+            shap_matrix[i, class_idx] = per_occurrence * float(_centroid_diffs[class_idx, idx])
 
     return tokens, shap_matrix
+
+
+def _resolve_display_token(token: str, text: str) -> str:
+    if not text:
+        return token
+
+    lower_text = text.lower()
+    token_lower = token.lower()
+
+    if " " in token:
+        idx = lower_text.find(token_lower)
+        if idx != -1:
+            return text[idx:idx + len(token)]
+    else:
+        pattern = re.compile(r"\b" + re.escape(token_lower) + r"\b", re.IGNORECASE)
+        match = pattern.search(text)
+        if match:
+            return text[match.start():match.end()]
+
+        for suffix in ["n't", "’t", "'t", "t"]:
+            pattern = re.compile(r"\b" + re.escape(token_lower + suffix) + r"\b", re.IGNORECASE)
+            match = pattern.search(text)
+            if match:
+                return text[match.start():match.end()]
+
+    return token
+
+
+def _aggregate_records(records: List[dict]) -> List[dict]:
+    merged = {}
+    for rec in records:
+        key = rec["token"].lower()
+        if key not in merged:
+            merged[key] = {
+                "token": rec["token"],
+                "shap": 0.0,
+                "abs_shap": 0.0,
+                "direction": rec["direction"],
+                "note": rec.get("note", ""),
+            }
+        merged[key]["shap"] += float(rec["shap"])
+
+    for item in merged.values():
+        item["abs_shap"] = abs(float(item["shap"]))
+        item["direction"] = "↑ increases risk" if item["shap"] > 0 else "↓ reduces risk"
+
+    return list(merged.values())
 
 
 def explain_with_shap(text: str, top_n: int = 8) -> SHAPResult:
@@ -217,13 +369,15 @@ def explain_with_shap(text: str, top_n: int = 8) -> SHAPResult:
         clean = tok.strip()
         if not clean:
             continue
+        display = _resolve_display_token(clean, text)
         records.append({
-            "token": clean,
+            "token": display,
             "shap": float(sv),
             "abs_shap": abs(float(sv)),
             "direction": "↑ increases risk" if sv > 0 else "↓ reduces risk",
             "note": "",
         })
+    records = _aggregate_records(records)
     records.sort(key=lambda x: x["abs_shap"], reverse=True)
 
     return SHAPResult(

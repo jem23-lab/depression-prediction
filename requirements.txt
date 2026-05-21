@@ -12,6 +12,7 @@ shap
 dice-ml
 sentence-transformers
 faiss-cpu
+joblib
 
 # LLMs (offline option)
 transformers

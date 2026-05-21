@@ -327,5 +327,22 @@ PARAGRAPHS = [
             "and recall being bullied as a child. Currently, my main personal challenge is losing some weight I "
             "recently gained, but I remain motivated to pursue my goals without hesitation."
         )
+    },
+    {
+        "id": "daic_woz_no_depression_434",
+        "severity": "none",
+        "text": (
+            "I am doing very good and feeling enthusiastic about the future, though I am currently "
+            "facing employment and financial challenges. I studied alcohol and drug counseling to "
+            "fulfill my life mission of helping people overcome addiction. However, a past felony "
+            "and lack of certification complicate my job search. I am incredibly proud of my mother, "
+            "but my broader family structure is fractured; my brother has been imprisoned for twenty "
+            "years, my sister moved away long ago, and I am still searching for my son. I struggle with "
+            "my sleep, usually staying up until three in the morning, and notice slight appetite issues."
+            " I actively manage my thoughts and behavior to remain calm and mellow, drawing coping skills"
+            " from an influential mentor who helped me control a historically volatile temper. I still "
+            "experience intrusive cognitive patterns, frequently replaying a traumatic memory of my "
+            "brother hitting my mother and feeling self-conscious about my teeth."
+        )
     }
 ]

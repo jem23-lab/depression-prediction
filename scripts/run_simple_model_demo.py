@@ -1,20 +1,13 @@
-import importlib.util
-from pathlib import Path
 import sys
-
-
-def _load_model_module():
-    repo_root = Path(__file__).resolve().parents[1]
-    sys.path.insert(0, str(repo_root))
-    module_path = repo_root / "shared" / "depression_model copy.py"
-    spec = importlib.util.spec_from_file_location("depression_model_copy", module_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from pathlib import Path
 
 
 def main():
-    model = _load_model_module()
+    repo_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(repo_root))
+
+    from shared import depression_model as model
+
     model.load()
 
     samples = [

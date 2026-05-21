@@ -121,9 +121,9 @@ USE_CASES = {
 }
 
 EVAL_CRITERIA = [
-    ("clarity", "Clarity"),
-    ("correctness", "Correctness (logical and factual alignment with question)"),
-    ("helpfulness", "Helpfulness (how well it answers the user's intent)"),
+    ("clarity", "Clarity (is the explanation easy to understand?)"),
+    ("correctness", "Correctness (does the explanation logically and factually align with the question?)"),
+    ("helpfulness", "Helpfulness (does the explanation address what you actually wanted to know?)"),
 ]
 
 
@@ -325,9 +325,6 @@ def _extract_prediction_confidence(payload):
 def _evaluation_prompt(paragraph_text: str, explanation: str, ratings: dict, step: int) -> str:
     criteria_lines = [
         "Rate the assistant's explanation based on:",
-        "1. Clarity",
-        "2. Correctness (logical and factual alignment with question)",
-        "3. Helpfulness (how well it answers the user's intent)",
         "",
     ]
     for key, label in EVAL_CRITERIA:
