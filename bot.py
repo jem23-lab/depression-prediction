@@ -22,6 +22,7 @@ import logging
 import random
 from datetime import datetime, timezone
 import re
+import asyncio
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -42,6 +43,7 @@ from shared.llm_client import strip_markdown
 from shared.depression_model import load as preload_model
 from shared.eval_logger import append_evaluation_row
 from shared.training_examples import PARAGRAPHS
+from shared.depression_model import explain_with_shap, predict_proba, classify_severity, LABEL_MAP
 
 # ── Logging ──────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -96,14 +98,24 @@ async def safe_send(update: Update, text: str, chunk_size: int = 4000):
 async def send_footer(update: Update):
     await update.message.reply_text(
         "─────────────────────────────\n"
-        "Type /assess to run another analysis.\n"
-        "Type /reset to clear your session."
+        "Type /begin to start a new session."
     )
 
 
 def _rating_keyboard() -> InlineKeyboardMarkup:
     row = [InlineKeyboardButton(str(i), callback_data=f"rate:{i}") for i in range(1, 6)]
     return InlineKeyboardMarkup([row])
+
+
+def _pause():
+    return asyncio.sleep(random.uniform(2.0, 3.0))
+
+
+async def _send_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None):
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    if chat_id is None:
+        return None
+    return await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
 
 
 def _format_box(title: str, body: str, width: int = 48) -> str:
@@ -137,6 +149,10 @@ def _format_for_display(text: str) -> str:
         text = re.sub(rf"([.!?])\s+({re.escape(marker)})", r"\1\n\n\2", text)
 
     return text
+
+
+def _join_box_lines(lines: list) -> str:
+    return "\n".join([ln for ln in lines if ln is not None])
 
 
 # PARAGRAPHS are defined in shared.training_examples
@@ -178,7 +194,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safe_send(update, result["response"])
 
     if result["status"] == "ready":
-        await _start_evaluation(update, context)
+        await _begin_session(update, context)
 
 
 async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -265,118 +281,201 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await reply_message.reply_text(
         "Thanks. Your evaluation has been saved.\n"
         f"Scores -> Clarity: {ratings['clarity']}, Correctness: {ratings['correctness']}, Helpfulness: {ratings['helpfulness']}\n"
-        f"Average: {avg:.2f}\n\n"
-        "Type /assess to run another evaluation."
+        f"Average: {avg:.2f}"
     )
     context.user_data.pop("eval_flow", None)
+
+    pending = context.user_data.get("pending_explanations") or []
+    pending_idx = context.user_data.get("pending_index", 0)
+
+    if pending_idx + 1 < len(pending):
+        context.user_data["pending_index"] = pending_idx + 1
+        await _pause()
+        method, explanation = pending[pending_idx + 1]
+        await _send_message(update, context, _format_box("Explanation", explanation))
+        await _pause()
+
+        paragraph_id = context.user_data.get("current_paragraph_id", "")
+        paragraph_text = context.user_data.get("current_paragraph_text", "")
+        paragraph_severity = context.user_data.get("current_paragraph_severity", "")
+        label = context.user_data.get("current_prediction_label", "unknown")
+        conf = context.user_data.get("current_prediction_confidence", 0.0)
+
+        context.user_data["eval_flow"] = {
+            "session_id": context.user_data.get("session_id"),
+            "paragraph_id": paragraph_id,
+            "paragraph_text": paragraph_text,
+            "paragraph_severity": paragraph_severity,
+            "selected_use_case": method,
+            "selected_use_case_name": method,
+            "prediction_label": label,
+            "prediction_confidence": conf,
+            "explanation": explanation,
+            "ratings": {"clarity": None, "correctness": None, "helpfulness": None},
+            "step": 0,
+            "prompt_message_id": None,
+        }
+
+        prompt = _evaluation_prompt(
+            paragraph_text=paragraph_text,
+            explanation=explanation,
+            ratings=context.user_data["eval_flow"]["ratings"],
+            step=0,
+        )
+        sent = await _send_message(update, context, prompt, reply_markup=_rating_keyboard())
+        if sent is not None:
+            context.user_data["eval_flow"]["prompt_message_id"] = sent.message_id
+        return True
+
+    context.user_data.pop("pending_explanations", None)
+    context.user_data.pop("pending_index", None)
+    context.user_data.pop("current_paragraph_id", None)
+    context.user_data.pop("current_paragraph_text", None)
+    context.user_data.pop("current_paragraph_severity", None)
+    context.user_data.pop("current_prediction_label", None)
+    context.user_data.pop("current_prediction_confidence", None)
+
+    await reply_message.reply_text("Proceeding to the next text sample...")
+
+    if context.user_data.get("sample_queue"):
+        await _run_next_sample(update, context)
+        return True
+
+    await reply_message.reply_text("Study complete. Type /begin to start again.")
     return True
 
 
-async def _start_evaluation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _begin_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    selected_paragraph = random.choice(PARAGRAPHS)
+    samples = list(PARAGRAPHS)
+    random.shuffle(samples)
+    total = min(10, len(samples))
+    context.user_data["sample_queue"] = samples[:total]
+    context.user_data["session_id"] = f"{user_id}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+
+    await _run_next_sample(update, context)
+
+
+def _pick_explanation_methods() -> list:
+    methods = ["SHAP", "RAG", "HYBRID", "COUNTERFACTUAL"]
+    return random.sample(methods, 2)
+
+
+def _prediction_from_text(user_text: str):
+    probs = predict_proba([user_text])[0]
+    label, _, _ = classify_severity(probs)
+    idx = int(probs.argmax()) if probs is not None else 0
+    return label, float(probs[idx]) if probs is not None else 0.0
+
+
+def _override_prediction(model_result, label: str, confidence: float):
+    if hasattr(model_result, "pred_label"):
+        setattr(model_result, "pred_label", label)
+    if hasattr(model_result, "pred_label_idx"):
+        label_to_idx = {v: k for k, v in LABEL_MAP.items()}
+        setattr(model_result, "pred_label_idx", label_to_idx.get(label, 0))
+    if hasattr(model_result, "pred_probs"):
+        probs = getattr(model_result, "pred_probs")
+        if probs is not None and len(probs) > 0:
+            return
+
+
+def _run_explanation_method(method: str, user_text: str, forced_label: str, forced_conf: float) -> tuple:
+    if method == "SHAP":
+        model_result = explain_with_shap(user_text)
+        _override_prediction(model_result, forced_label, forced_conf)
+        _, _, generate_explanation = _get_shap_pipeline()
+        explanation = generate_explanation(user_text, model_result)
+        return model_result, explanation
+
+    if method == "RAG":
+        rag_pipeline, generate_explanation, _ = _get_rag_pipeline()
+        model_result = rag_pipeline(user_text)
+        _override_prediction(model_result, forced_label, forced_conf)
+        explanation = generate_explanation(user_text, model_result)
+        return model_result, explanation
+
+    if method == "HYBRID":
+        run_hybrid, _, _, generate_explanation = _get_hybrid_pipeline()
+        model_result = run_hybrid(user_text)
+        if hasattr(model_result, "shap_result") and model_result.shap_result:
+            _override_prediction(model_result.shap_result, forced_label, forced_conf)
+        if hasattr(model_result, "rag_result") and model_result.rag_result:
+            _override_prediction(model_result.rag_result, forced_label, forced_conf)
+        explanation = generate_explanation(user_text, model_result)
+        return model_result, explanation
+
+    generate_counterfactuals, _, generate_explanation, _ = _get_cf_pipeline()
+    model_result = generate_counterfactuals(user_text, n_candidates=3, n_attempts=2)
+    if hasattr(model_result, "pred_label"):
+        _override_prediction(model_result, forced_label, forced_conf)
+    explanation = generate_explanation(user_text, model_result)
+    return model_result, explanation
+
+
+async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    queue = context.user_data.get("sample_queue") or []
+    if not queue:
+        await _send_message(update, context, "Study complete. Type /begin to start again.")
+        return
+
+    selected_paragraph = queue.pop(0)
+    context.user_data["sample_queue"] = queue
+
     paragraph_id = selected_paragraph["id"]
     paragraph_text = selected_paragraph["text"]
     paragraph_severity = selected_paragraph["severity"]
 
-    await update.message.reply_text(_format_box("Evaluation Paragraph", _format_for_display(paragraph_text)))
-    await update.message.reply_text("Running evaluation pipeline...")
+    label, conf = _prediction_from_text(paragraph_text)
+    methods = _pick_explanation_methods()
 
-    eval_result = await _run_random_explanation(paragraph_text)
+    context.user_data["current_paragraph_id"] = paragraph_id
+    context.user_data["current_paragraph_text"] = paragraph_text
+    context.user_data["current_paragraph_severity"] = paragraph_severity
+    context.user_data["current_prediction_label"] = label
+    context.user_data["current_prediction_confidence"] = conf
+
+    await _send_message(update, context, _format_box("Text Sample", _format_for_display(paragraph_text)))
+    await _pause()
+
+    await _send_message(update, context, _format_box("Prediction", f"Prediction : {label}"))
+    await _pause()
+
+    _, explanation_1 = _run_explanation_method(methods[0], paragraph_text, label, conf)
+    _, explanation_2 = _run_explanation_method(methods[1], paragraph_text, label, conf)
+
+    context.user_data["pending_explanations"] = [
+        (methods[0], explanation_1),
+        (methods[1], explanation_2),
+    ]
+    context.user_data["pending_index"] = 0
+
+    await _send_message(update, context, _format_box("Explanation", explanation_1))
+    await _pause()
 
     context.user_data["eval_flow"] = {
-        "session_id": f"{user_id}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+        "session_id": context.user_data.get("session_id"),
         "paragraph_id": paragraph_id,
         "paragraph_text": paragraph_text,
         "paragraph_severity": paragraph_severity,
-        "selected_use_case": eval_result["use_case"],
-        "selected_use_case_name": eval_result["use_case_name"],
-        "prediction_label": eval_result["prediction_label"],
-        "prediction_confidence": eval_result["prediction_confidence"],
-        "explanation": eval_result["explanation"],
+        "selected_use_case": methods[0],
+        "selected_use_case_name": methods[0],
+        "prediction_label": label,
+        "prediction_confidence": conf,
+        "explanation": explanation_1,
         "ratings": {"clarity": None, "correctness": None, "helpfulness": None},
         "step": 0,
         "prompt_message_id": None,
     }
-
-    await safe_send(update, _format_box("Evaluation Explanation", eval_result["explanation"]))
-
-    text = _evaluation_prompt(
+    prompt = _evaluation_prompt(
         paragraph_text=paragraph_text,
-        explanation=eval_result["explanation"],
+        explanation=explanation_1,
         ratings=context.user_data["eval_flow"]["ratings"],
         step=0,
     )
-    sent = await update.message.reply_text(text, reply_markup=_rating_keyboard())
-    context.user_data["eval_flow"]["prompt_message_id"] = sent.message_id
-
-
-async def _run_random_explanation(user_text: str) -> dict:
-    use_case = random.choice(list(USE_CASES.keys()))
-
-    if use_case == "1":
-        explain_with_shap, _, generate_shap_explanation = _get_shap_pipeline()
-        model_result = explain_with_shap(user_text)
-        explanation = generate_shap_explanation(user_text, model_result)
-    elif use_case == "2":
-        rag_pipeline, generate_rag_explanation, _ = _get_rag_pipeline()
-        model_result = rag_pipeline(user_text)
-        explanation = generate_rag_explanation(user_text, model_result)
-    elif use_case == "3":
-        run_hybrid, _, _, generate_explanation = _get_hybrid_pipeline()
-        model_result = run_hybrid(user_text)
-        explanation = generate_explanation(user_text, model_result)
-    elif use_case == "4":
-        generate_counterfactuals, _, generate_cf_explanation, _ = _get_cf_pipeline()
-        model_result = generate_counterfactuals(user_text, n_candidates=3, n_attempts=2)
-        explanation = generate_cf_explanation(user_text, model_result)
-    # elif use_case == "5":
-    #     run_mcp_pipeline = _get_mcp_pipeline()
-    #     model_result = run_mcp_pipeline(user_text)
-    #     explanation = model_result.get("explanation", "No explanation returned.")
-
-    pred_label, pred_conf = _extract_prediction_confidence(model_result)
-    return {
-        "use_case": use_case,
-        "use_case_name": USE_CASES[use_case],
-        "prediction_label": pred_label,
-        "prediction_confidence": pred_conf,
-        "explanation": explanation,
-    }
-
-
-def _extract_prediction_confidence(payload):
-    label = "unknown"
-    confidence = 0.0
-
-    if hasattr(payload, "pred_label"):
-        label = getattr(payload, "pred_label", "unknown")
-        idx = getattr(payload, "pred_label_idx", None)
-        probs = getattr(payload, "pred_probs", None)
-        if idx is not None and probs is not None:
-            try:
-                confidence = float(probs[idx])
-            except Exception:
-                confidence = 0.0
-    elif hasattr(payload, "original_label"):
-        label = getattr(payload, "original_label", "unknown")
-        probs = getattr(payload, "original_probs", None)
-        if probs is not None:
-            from shared.depression_model import LABEL_MAP
-            label_to_idx = {v: k for k, v in LABEL_MAP.items()}
-            idx = label_to_idx.get(label)
-            try:
-                confidence = float(probs[idx]) if idx is not None else float(max(probs))
-            except Exception:
-                confidence = 0.0
-    elif isinstance(payload, dict):
-        label = str(payload.get("prediction", "unknown"))
-        try:
-            confidence = float(payload.get("confidence", 0.0) or 0.0)
-        except Exception:
-            confidence = 0.0
-
-    return label, confidence
+    sent = await _send_message(update, context, prompt, reply_markup=_rating_keyboard())
+    if sent is not None:
+        context.user_data["eval_flow"]["prompt_message_id"] = sent.message_id
 
 
 def _evaluation_prompt(paragraph_text: str, explanation: str, ratings: dict, step: int) -> str:
@@ -391,7 +490,7 @@ def _evaluation_prompt(paragraph_text: str, explanation: str, ratings: dict, ste
     if step < len(EVAL_CRITERIA):
         _, label = EVAL_CRITERIA[step]
         criteria_lines.append("")
-        criteria_lines.append(f"Please enter {label} score (1-5).")
+        criteria_lines.append(f"Tap {label} score (1-5).")
 
     return _format_box("Evaluation", "\n".join(criteria_lines))
 
@@ -652,7 +751,7 @@ def main():
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set.")
 
     application = Application.builder().token(token).build()
-    application.add_handler(CommandHandler(["start", "help", "assess", "reset"], handle_message))
+    application.add_handler(CommandHandler(["start", "help", "begin"], handle_message))
     application.add_handler(CallbackQueryHandler(handle_message))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 

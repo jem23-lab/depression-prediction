@@ -71,17 +71,16 @@ python scripts/run_simple_model_demo.py
 
 ## Bot flow (current)
 
-The bot is evaluation-first (no menu). When the user sends `/assess`:
+The bot is evaluation-first (no menu). When the user sends `/begin`:
 
-1. Bot selects a fixed participant paragraph (DAIC-WOZ style).
-2. Bot randomly selects one of 5 use cases (SHAP, RAG, Hybrid, Counterfactual, MCP).
-3. Bot sends multiple message boxes in order:
-   - 1) Paragraph (fixed)
-   - 2) Prediction (level + confidence)
-   - 3) Tool Result (raw factors)
-   - 4) Explanation (plain-language factor summary)
-4. Bot sends an Evaluation box that is editable after each rating.
-5. Ratings are stored in `logs/evaluation_records.csv`.
+1. Bot selects 10 participant paragraphs (DAIC-WOZ style).
+2. For each sample, it shows:
+   - 1) Text Sample
+   - 2) Prediction
+   - 3) Explanation 1 (random method)
+   - 4) Explanation 2 (random, different method)
+   - 5) Rating prompt (buttons 1–5)
+3. Ratings are stored in `logs/evaluation_records.csv`.
 
 ## Explanation style (important)
 
@@ -93,9 +92,9 @@ Explanations are factor-only and user-friendly:
 
 ## Evaluation flow
 
-1. User sends `/assess`.
-2. Bot shows the participant paragraph and explanation in separate boxes.
-3. Bot sends a single editable Evaluation box for ratings.
+1. User sends `/begin`.
+2. Bot shows each text sample, prediction, and two explanations.
+3. Bot sends a single editable Evaluation box for ratings (buttons 1–5).
 4. The Evaluation box updates after each score entry.
 5. Results are appended to `logs/evaluation_records.csv`.
 
@@ -124,4 +123,4 @@ export GOOGLE_API_KEY="your_key"
 python bot.py
 ```
 
-In Telegram, use `/assess` to start each evaluation cycle.
+In Telegram, use `/begin` to start each study session.
