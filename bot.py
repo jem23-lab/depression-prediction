@@ -21,12 +21,14 @@ import sys
 import logging
 import random
 from datetime import datetime, timezone
+import re
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
     ContextTypes,
 )
@@ -99,14 +101,42 @@ async def send_footer(update: Update):
     )
 
 
+def _rating_keyboard() -> InlineKeyboardMarkup:
+    row = [InlineKeyboardButton(str(i), callback_data=f"rate:{i}") for i in range(1, 6)]
+    return InlineKeyboardMarkup([row])
+
+
 def _format_box(title: str, body: str, width: int = 48) -> str:
     line = "=" * width
     divider = "-" * width
     return f"{line}\n{title}\n{divider}\n{body}"
 
 
-def _join_box_lines(lines: list) -> str:
-    return "\n".join([ln for ln in lines if ln is not None])
+def _format_for_display(text: str) -> str:
+    if not text:
+        return text
+
+    markers = [
+        "To cope",
+        "However",
+        "Although",
+        "Despite",
+        "Since",
+        "Between",
+        "Socially",
+        "Physically",
+        "Emotionally",
+        "Overall",
+        "Lately",
+        "My sleep",
+        "Sleep",
+        "Meanwhile",
+        "In addition",
+    ]
+    for marker in markers:
+        text = re.sub(rf"([.!?])\s+({re.escape(marker)})", r"\1\n\n\2", text)
+
+    return text
 
 
 # PARAGRAPHS are defined in shared.training_examples
@@ -129,6 +159,14 @@ EVAL_CRITERIA = [
 
 # ── Central message handler ──────────────────────────────────────────
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.callback_query:
+        if await _handle_rating(update, context):
+            return
+        return
+
+    if update.message is None:
+        return
+
     user_id = update.effective_user.id
     text = (update.message.text or "").strip()
     logger.info("User %s: %s", user_id, text[:80])
@@ -148,15 +186,30 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not flow:
         return False
 
-    raw = (update.message.text or "").strip()
+    reply_message = update.message
+
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        raw = (query.data or "").strip()
+        if not raw.startswith("rate:"):
+            return False
+        raw = raw.split(":", 1)[1]
+        reply_message = query.message
+    else:
+        raw = (update.message.text or "").strip()
+
+    if reply_message is None:
+        return False
+
     try:
         score = int(raw)
     except ValueError:
-        await update.message.reply_text("Please enter a valid integer score from 1 to 5.")
+        await reply_message.reply_text("Please enter a valid integer score from 1 to 5.")
         return True
 
     if score < 1 or score > 5:
-        await update.message.reply_text("Score must be between 1 and 5.")
+        await reply_message.reply_text("Score must be between 1 and 5.")
         return True
 
     step = flow["step"]
@@ -175,9 +228,13 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             chat_id=update.effective_chat.id,
             message_id=flow["prompt_message_id"],
             text=updated_text,
+            reply_markup=_rating_keyboard() if flow["step"] < len(EVAL_CRITERIA) else None,
         )
     except Exception:
-        sent = await update.message.reply_text(updated_text)
+        sent = await reply_message.reply_text(
+            updated_text,
+            reply_markup=_rating_keyboard() if flow["step"] < len(EVAL_CRITERIA) else None,
+        )
         flow["prompt_message_id"] = sent.message_id
 
     if flow["step"] < len(EVAL_CRITERIA):
@@ -205,7 +262,7 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         },
     )
 
-    await update.message.reply_text(
+    await reply_message.reply_text(
         "Thanks. Your evaluation has been saved.\n"
         f"Scores -> Clarity: {ratings['clarity']}, Correctness: {ratings['correctness']}, Helpfulness: {ratings['helpfulness']}\n"
         f"Average: {avg:.2f}\n\n"
@@ -222,7 +279,7 @@ async def _start_evaluation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     paragraph_text = selected_paragraph["text"]
     paragraph_severity = selected_paragraph["severity"]
 
-    await update.message.reply_text(_format_box("Evaluation Paragraph", paragraph_text))
+    await update.message.reply_text(_format_box("Evaluation Paragraph", _format_for_display(paragraph_text)))
     await update.message.reply_text("Running evaluation pipeline...")
 
     eval_result = await _run_random_explanation(paragraph_text)
@@ -250,7 +307,7 @@ async def _start_evaluation(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ratings=context.user_data["eval_flow"]["ratings"],
         step=0,
     )
-    sent = await update.message.reply_text(text)
+    sent = await update.message.reply_text(text, reply_markup=_rating_keyboard())
     context.user_data["eval_flow"]["prompt_message_id"] = sent.message_id
 
 
@@ -344,7 +401,7 @@ async def run_shap_pipeline(update: Update, user_id: int, user_text: str):
     explain_with_shap, format_debug, generate_shap_explanation = _get_shap_pipeline()
     logger.info("UC1 SHAP for user %s", user_id)
 
-    paragraph_box = _format_box("1) Paragraph", user_text)
+    paragraph_box = _format_box("1) Paragraph", _format_for_display(user_text))
     await update.message.reply_text(paragraph_box)
     await update.message.reply_text("Running SHAP prediction...")
 
@@ -391,7 +448,7 @@ async def run_rag_pipeline(update: Update, user_id: int, user_text: str):
     rag_pipeline, generate_rag_explanation, format_rag_debug = _get_rag_pipeline()
     logger.info("UC2 RAG for user %s", user_id)
 
-    paragraph_box = _format_box("1) Paragraph", user_text)
+    paragraph_box = _format_box("1) Paragraph", _format_for_display(user_text))
     await update.message.reply_text(paragraph_box)
     await update.message.reply_text("Running RAG prediction...")
 
@@ -435,7 +492,7 @@ async def run_hybrid_pipeline_handler(update: Update, user_id: int, user_text: s
     run_hybrid, format_debug, format_preview, generate_explanation = _get_hybrid_pipeline()
     logger.info("UC3 Hybrid for user %s", user_id)
 
-    paragraph_box = _format_box("1) Paragraph", user_text)
+    paragraph_box = _format_box("1) Paragraph", _format_for_display(user_text))
     await update.message.reply_text(paragraph_box)
 
     await update.message.reply_text(
@@ -489,7 +546,7 @@ async def run_cf_pipeline(update: Update, user_id: int, user_text: str):
     generate_counterfactuals, format_cf_debug, generate_cf_explanation, format_cf_preview = _get_cf_pipeline()
     logger.info("UC4 CF for user %s", user_id)
 
-    paragraph_box = _format_box("1) Paragraph", user_text)
+    paragraph_box = _format_box("1) Paragraph", _format_for_display(user_text))
     await update.message.reply_text(paragraph_box)
 
     await update.message.reply_text(
@@ -528,7 +585,7 @@ async def run_mcp_pipeline_handler(update: Update, user_id: int, user_text: str)
     run_mcp_pipeline = _get_mcp_pipeline()
     logger.info("UC5 MCP for user %s", user_id)
 
-    paragraph_box = _format_box("1) Paragraph", user_text)
+    paragraph_box = _format_box("1) Paragraph", _format_for_display(user_text))
     await update.message.reply_text(paragraph_box)
 
     await update.message.reply_text(
@@ -596,6 +653,7 @@ def main():
 
     application = Application.builder().token(token).build()
     application.add_handler(CommandHandler(["start", "help", "assess", "reset"], handle_message))
+    application.add_handler(CallbackQueryHandler(handle_message))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     application.post_init = _on_startup
