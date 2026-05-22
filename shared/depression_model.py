@@ -22,6 +22,7 @@ import os
 import re
 
 import numpy as np
+import shap
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize
 from sklearn.linear_model import LogisticRegression
@@ -270,9 +271,47 @@ class SHAPResult:
     protective_tokens: List[dict] = field(default_factory=list)
 
 
+_SHAP_EXPLAINER = None
+_SHAP_MASKER = None
+_GENERIC_TOKENS = {"things", "stuff", "something", "anything", "everything", "really", "very"}
+
+
+def _get_shap_explainer():
+    global _SHAP_EXPLAINER, _SHAP_MASKER
+
+    if _SHAP_EXPLAINER is not None:
+        return _SHAP_EXPLAINER
+
+    token_pattern = r"[A-Za-z]+(?:['’][A-Za-z]+)?"
+    _SHAP_MASKER = shap.maskers.Text(token_pattern)
+
+    def _model_fn(texts):
+        return predict_proba(list(texts))
+
+    _SHAP_EXPLAINER = shap.Explainer(_model_fn, _SHAP_MASKER)
+    return _SHAP_EXPLAINER
+
+
+def _token_contributions_shap(text: str) -> Tuple[List[str], np.ndarray]:
+    explainer = _get_shap_explainer()
+    shap_values = explainer([text])
+
+    tokens = list(shap_values.data[0]) if shap_values.data is not None else []
+    values = np.asarray(shap_values.values[0])
+    if values.ndim == 1:
+        values = values[:, None]
+
+    return tokens, values
+
+
 def _token_contributions(text: str) -> Tuple[List[str], np.ndarray]:
     """Compute SHAP-like per-token contributions from centroid differences."""
     load()
+
+    try:
+        return _token_contributions_shap(text)
+    except Exception as exc:
+        logger.debug("SHAP tokenizer failed, falling back to centroid contributions: %s", exc)
 
     analyzer = _vectorizer.build_analyzer()
     tokens = analyzer(text)
@@ -351,6 +390,19 @@ def _aggregate_records(records: List[dict]) -> List[dict]:
     return list(merged.values())
 
 
+def _rank_records(records: List[dict]) -> List[dict]:
+    return sorted(
+        records,
+        key=lambda r: (r["abs_shap"], 1 if " " in r["token"] else 0, len(r["token"])),
+        reverse=True,
+    )
+
+
+def _filter_generic(records: List[dict]) -> List[dict]:
+    filtered = [r for r in records if r["token"].lower() not in _GENERIC_TOKENS]
+    return filtered or records
+
+
 def explain_with_shap(text: str, top_n: int = 8) -> SHAPResult:
     """
     Runs SHAP-like token-level explanation on the RAW user text.
@@ -378,7 +430,7 @@ def explain_with_shap(text: str, top_n: int = 8) -> SHAPResult:
             "note": "",
         })
     records = _aggregate_records(records)
-    records.sort(key=lambda x: x["abs_shap"], reverse=True)
+    records = _filter_generic(_rank_records(records))
 
     return SHAPResult(
         text=text,
