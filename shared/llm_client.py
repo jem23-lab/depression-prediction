@@ -1,63 +1,43 @@
 """
 shared/llm_client.py
 ────────────────────────────────────────────────────────────────────
-Shared Gemini client used by ALL explainer use cases.
+Shared LLM client used by ALL explainer use cases.
 
-Handles:
-  - API key config
-  - Model fallback chain (tries models in order until one works)
-  - strip_markdown() for safe Telegram output
+Uses a vLLM-compatible OpenAI API endpoint.
 """
 
 import os
 import re
 import logging
-import google.generativeai as genai
+from openai import OpenAI
 
 logger = logging.getLogger("llm_client")
 
-# Fallback chain — tried in order until one succeeds
-GEMINI_MODELS = [
-    "gemini-3-flash-preview"
-]
+VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://134.60.124.43:8000/v1")
+VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "token-is-ignored-by-vllm")
+VLLM_MODEL = os.environ.get("VLLM_MODEL", "openai/gpt-oss-20b")
 
 
 def call_gemini(prompt: str, system: str = "") -> str:
     """
-    Calls Gemini with prompt + optional system prefix.
-    Tries each model in GEMINI_MODELS until one succeeds.
-    Raises RuntimeError if all fail.
+    Calls a vLLM-compatible OpenAI endpoint with prompt + optional system prefix.
+    Keeps the function name for compatibility with existing pipelines.
     """
-    key = os.environ.get("GOOGLE_API_KEY", "")
-    if not key:
-        raise RuntimeError(
-            "GOOGLE_API_KEY is not set. "
-            "Export it with: export GOOGLE_API_KEY='your_key'"
-        )
-    genai.configure(api_key=key)
+    client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
 
-    full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
-    contents    = [{"role": "user", "parts": [full_prompt]}]
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
 
-    last_error = None
-    for model_name in GEMINI_MODELS:
-        try:
-            logger.info("Trying Gemini model: %s", model_name)
-            model    = genai.GenerativeModel(model_name)
-            response = model.generate_content(contents=contents)
-            text     = (response.text or "").strip()
-            if text:
-                logger.info("Success with: %s", model_name)
-                return text
-            logger.warning("%s returned empty response", model_name)
-        except Exception as e:
-            logger.warning("%s failed: %s", model_name, e)
-            last_error = e
-
-    raise RuntimeError(
-        f"All Gemini models failed. Last error: {last_error}. "
-        f"Models tried: {GEMINI_MODELS}"
+    response = client.chat.completions.create(
+        model=VLLM_MODEL,
+        messages=messages,
+        extra_body={"top_k": 50},
     )
+
+    content = response.choices[0].message.content
+    return (content or "").strip()
 
 
 def strip_markdown(text: str) -> str:
