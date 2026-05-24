@@ -92,7 +92,7 @@ async def safe_send(update: Update, text: str, chunk_size: int = 4000):
     """Strip Markdown symbols and chunk-send as plain text."""
     text = strip_markdown(text)
     for i in range(0, max(len(text), 1), chunk_size):
-        await update.message.reply_text(text[i: i + chunk_size])
+        await update.message.reply_text(text[i: i + chunk_size], parse_mode="HTML")
 
 
 async def send_footer(update: Update):
@@ -115,13 +115,22 @@ async def _send_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text
     chat_id = update.effective_chat.id if update.effective_chat else None
     if chat_id is None:
         return None
-    return await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+    return await context.bot.send_message(
+        chat_id=chat_id,
+        text=strip_markdown(text),
+        reply_markup=reply_markup,
+        parse_mode="HTML",
+    )
 
 
 def _format_box(title: str, body: str, width: int = 48) -> str:
     line = "=" * width
     divider = "-" * width
-    return f"{line}\n{title}\n{divider}\n{body}"
+    return f"\n{line}\n{title}\n{divider}\n{body}\n{line}\n"
+
+
+def _format_title(base: str, label: str = "") -> str:
+    return f"{base} {label}".strip()
 
 
 def _format_for_display(text: str) -> str:
@@ -286,9 +295,13 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
     await reply_message.reply_text(
-        "Thanks. Your evaluation has been saved.\n"
-        f"Scores -> Clarity: {ratings['clarity']}, Correctness: {ratings['correctness']}, Helpfulness: {ratings['helpfulness']}, Trust: {ratings['trust']}\n"
-        f"Average: {avg:.2f}"
+        _format_box(
+            "⭐️Rating",
+            "Thanks. Your evaluation has been saved.\n"
+            f"Scores -> Clarity: {ratings['clarity']}, Correctness: {ratings['correctness']}, Helpfulness: {ratings['helpfulness']}, Trust: {ratings['trust']}\n"
+            f"Average: {avg:.2f}",
+        ),
+        parse_mode="HTML",
     )
     context.user_data.pop("eval_flow", None)
 
@@ -299,7 +312,11 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data["pending_index"] = pending_idx + 1
         await _pause()
         method, explanation = pending[pending_idx + 1]
-        await _send_message(update, context, _format_box("Explanation", explanation))
+        await _send_message(
+            update,
+            context,
+            _format_box("💡Explanation B", explanation),
+        )
         await _pause()
 
         paragraph_id = context.user_data.get("current_paragraph_id", "")
@@ -342,13 +359,19 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context.user_data.pop("current_prediction_label", None)
     context.user_data.pop("current_prediction_confidence", None)
 
-    await reply_message.reply_text("Proceeding to the next text sample...")
+    await reply_message.reply_text(
+        _format_box("⭐️Rating", "Proceeding to the next text sample..."),
+        parse_mode="HTML",
+    )
 
     if context.user_data.get("sample_queue"):
         await _run_next_sample(update, context)
         return True
 
-    await reply_message.reply_text("Study complete. Type /begin to start again.")
+    await reply_message.reply_text(
+        _format_box("⭐️Rating", "Study complete. Type /begin to start again."),
+        parse_mode="HTML",
+    )
     return True
 
 
@@ -358,6 +381,7 @@ async def _begin_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
     random.shuffle(samples)
     total = min(10, len(samples))
     context.user_data["sample_queue"] = samples[:total]
+    context.user_data["sample_index"] = 0
     context.user_data["session_id"] = f"{user_id}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
 
     await _run_next_sample(update, context)
@@ -423,11 +447,12 @@ def _run_explanation_method(method: str, user_text: str, forced_label: str, forc
 async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
     queue = context.user_data.get("sample_queue") or []
     if not queue:
-        await _send_message(update, context, "Study complete. Type /begin to start again.")
+        await _send_message(update, context, _format_box("⭐️Rating", "Study complete. Type /begin to start again."))
         return
 
     selected_paragraph = queue.pop(0)
     context.user_data["sample_queue"] = queue
+    context.user_data["sample_index"] = context.user_data.get("sample_index", 0) + 1
 
     paragraph_id = selected_paragraph["id"]
     paragraph_text = selected_paragraph["text"]
@@ -442,10 +467,15 @@ async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["current_prediction_label"] = label
     context.user_data["current_prediction_confidence"] = conf
 
-    await _send_message(update, context, _format_box("Text Sample", _format_for_display(paragraph_text)))
+    sample_number = context.user_data.get("sample_index", 1)
+    await _send_message(
+        update,
+        context,
+        _format_box(_format_title("📄Text Sample", str(sample_number)), _format_for_display(paragraph_text)),
+    )
     await _pause()
 
-    await _send_message(update, context, _format_box("Prediction", f"Prediction : {label}"))
+    await _send_message(update, context, _format_box("🤖Prediction", f"Prediction : {label}"))
     await _pause()
 
     _, explanation_1 = _run_explanation_method(methods[0], paragraph_text, label, conf)
@@ -457,7 +487,7 @@ async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     context.user_data["pending_index"] = 0
 
-    await _send_message(update, context, _format_box("Explanation", explanation_1))
+    await _send_message(update, context, _format_box("💡Explanation A", explanation_1))
     await _pause()
 
     context.user_data["eval_flow"] = {
@@ -499,7 +529,7 @@ def _evaluation_prompt(paragraph_text: str, explanation: str, ratings: dict, ste
         criteria_lines.append("")
         criteria_lines.append(f"Tap {label} score (1-5).")
 
-    return _format_box("Evaluation", "\n".join(criteria_lines))
+    return _format_box("⭐️Rating", "\n".join(criteria_lines))
 
 
 # ── Use Case 1: SHAP ─────────────────────────────────────────────────

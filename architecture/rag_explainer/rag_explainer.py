@@ -96,8 +96,8 @@ YOUR TASK — write a short, user-friendly response that:
 3. Keeps the focus on explanation of factors, not advice.
 
 Constraints:
-- Write ONE paragraph only (no lists or bullet points).
-- Highlight the 2-3 key phrases by wrapping them in double quotes.
+- If the explanation feels long, split it into 2 short paragraphs.
+- Highlight the 2-3 key phrases by wrapping them in **double asterisks**.
 - Do NOT mention RAG, PHQ-8, probabilities, or scores.
 - Do NOT include self-care tips, support suggestions, or disclaimers.
 - Length: 90-130 words.

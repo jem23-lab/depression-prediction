@@ -43,8 +43,10 @@ def call_gemini(prompt: str, system: str = "") -> str:
 def strip_markdown(text: str) -> str:
     """
     Removes Markdown symbols so Telegram doesn't choke on unmatched
-    *, _, `, [ characters from Gemini output.
+    *, _, `, [ characters while preserving bold emphasis.
     """
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    text = re.sub(r"\*{2}(.*?)\*{2}", r"<b>\1</b>", text, flags=re.DOTALL)
     text = re.sub(r"\*{1,3}(.*?)\*{1,3}", r"\1", text, flags=re.DOTALL)
     text = re.sub(r"_{1,3}(.*?)_{1,3}",   r"\1", text, flags=re.DOTALL)
     text = re.sub(r"`{1,3}(.*?)`{1,3}",   r"\1", text, flags=re.DOTALL)
