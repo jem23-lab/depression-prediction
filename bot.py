@@ -170,6 +170,7 @@ EVAL_CRITERIA = [
     ("clarity", "Clarity (is the explanation easy to understand?)"),
     ("correctness", "Correctness (does the explanation logically and factually align with the question?)"),
     ("helpfulness", "Helpfulness (does the explanation address what you actually wanted to know?)"),
+    ("trust", "Trust (does the explanation make you more confident in the AI system's output?)"),
 ]
 
 
@@ -257,7 +258,12 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return True
 
     ratings = flow["ratings"]
-    avg = round((ratings["clarity"] + ratings["correctness"] + ratings["helpfulness"]) / 3.0, 3)
+    avg = round((
+        ratings["clarity"]
+        + ratings["correctness"]
+        + ratings["helpfulness"]
+        + ratings["trust"]
+    ) / 4.0, 3)
     csv_path = os.path.join(_ROOT, "logs", "evaluation_records.csv")
     append_evaluation_row(
         csv_path,
@@ -274,13 +280,14 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "rating_clarity": ratings["clarity"],
             "rating_correctness": ratings["correctness"],
             "rating_helpfulness": ratings["helpfulness"],
+            "rating_trust": ratings["trust"],
             "rating_overall_avg": avg,
         },
     )
 
     await reply_message.reply_text(
         "Thanks. Your evaluation has been saved.\n"
-        f"Scores -> Clarity: {ratings['clarity']}, Correctness: {ratings['correctness']}, Helpfulness: {ratings['helpfulness']}\n"
+        f"Scores -> Clarity: {ratings['clarity']}, Correctness: {ratings['correctness']}, Helpfulness: {ratings['helpfulness']}, Trust: {ratings['trust']}\n"
         f"Average: {avg:.2f}"
     )
     context.user_data.pop("eval_flow", None)
@@ -311,7 +318,7 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "prediction_label": label,
             "prediction_confidence": conf,
             "explanation": explanation,
-            "ratings": {"clarity": None, "correctness": None, "helpfulness": None},
+            "ratings": {"clarity": None, "correctness": None, "helpfulness": None, "trust": None},
             "step": 0,
             "prompt_message_id": None,
         }
@@ -463,7 +470,7 @@ async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "prediction_label": label,
         "prediction_confidence": conf,
         "explanation": explanation_1,
-        "ratings": {"clarity": None, "correctness": None, "helpfulness": None},
+        "ratings": {"clarity": None, "correctness": None, "helpfulness": None, "trust": None},
         "step": 0,
         "prompt_message_id": None,
     }

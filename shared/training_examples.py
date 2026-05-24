@@ -8,12 +8,12 @@ PARAGRAPHS = [
         "severity": "severe",
         "text": (
             "Lately, I’ve been feeling deeply depressed and weighed down by worries. My life feels"
-            " heavy; I had to settle for a retail job because I couldn't find work in my field,"
+            " heavy; I had to settle for a retail job because I couldn't find work in my field, "
             "and my daughter is currently battling cancer, leaving me frustrated and anxious. I"
             " haven't had a good night's sleep in a year, waking up every few hours. This severe "
-            "fatigue leaves me groggy, lacking energy, and struggling to concentrate, causing me"
+            "fatigue leaves me groggy, lacking energy, and struggling to concentrate, causing me "
             "to forget things and make mistakes at work. I’ve experienced a painful shift in my"
-            "social functioning and interests; I haven't gone out to dinner with a close friend "
+            " social functioning and interests; I haven't gone out to dinner with a close friend "
             "in over a year. My self-worth is low—I don't know my best qualities and regret my "
             "lack of education— and my appetite is disrupted.Though I find moments of pure joy"
             " playing with my granddaughter, I mostly feel trapped by sadness and failure, coping "

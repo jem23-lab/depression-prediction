@@ -26,6 +26,7 @@ def append_evaluation_row(csv_path: str, row: dict):
         "rating_clarity",
         "rating_correctness",
         "rating_helpfulness",
+        "rating_trust",
         "rating_overall_avg",
     ]
 
