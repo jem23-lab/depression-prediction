@@ -42,7 +42,13 @@ from shared.conversation import process_message
 from shared.llm_client import strip_markdown
 from shared.depression_model import load as preload_model
 from shared.eval_logger import append_evaluation_row
-from shared.training_examples import PARAGRAPHS
+from shared.training_examples import (
+    PARAGRAPHS,
+    get_cached_prediction,
+    save_prediction,
+    get_cached_explanation,
+    save_explanation,
+)
 from shared.depression_model import explain_with_shap, predict_proba, classify_severity, LABEL_MAP
 
 # ── Logging ──────────────────────────────────────────────────────────
@@ -296,7 +302,6 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     await reply_message.reply_text(
         _format_box(
-            "⭐️Rating",
             "Thanks. Your evaluation has been saved.\n"
             f"Scores -> Clarity: {ratings['clarity']}, Correctness: {ratings['correctness']}, Helpfulness: {ratings['helpfulness']}, Trust: {ratings['trust']}\n"
             f"Average: {avg:.2f}",
@@ -360,7 +365,7 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context.user_data.pop("current_prediction_confidence", None)
 
     await reply_message.reply_text(
-        _format_box("⭐️Rating", "Proceeding to the next text sample..."),
+        _format_box( "Proceeding to the next text sample..."),
         parse_mode="HTML",
     )
 
@@ -369,7 +374,7 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return True
 
     await reply_message.reply_text(
-        _format_box("⭐️Rating", "Study complete. Type /begin to start again."),
+        _format_box("Study complete. Type /begin to start again."),
         parse_mode="HTML",
     )
     return True
@@ -392,11 +397,17 @@ def _pick_explanation_methods() -> list:
     return random.sample(methods, 2)
 
 
-def _prediction_from_text(user_text: str):
+def _prediction_from_text(paragraph_id: str, user_text: str):
+    cached_label, cached_conf = get_cached_prediction(paragraph_id)
+    if cached_label is not None and cached_conf is not None:
+        return cached_label, cached_conf
+
     probs = predict_proba([user_text])[0]
     label, _, _ = classify_severity(probs)
     idx = int(probs.argmax()) if probs is not None else 0
-    return label, float(probs[idx]) if probs is not None else 0.0
+    conf = float(probs[idx]) if probs is not None else 0.0
+    save_prediction(paragraph_id, label, conf)
+    return label, conf
 
 
 def _override_prediction(model_result, label: str, confidence: float):
@@ -411,12 +422,23 @@ def _override_prediction(model_result, label: str, confidence: float):
             return
 
 
-def _run_explanation_method(method: str, user_text: str, forced_label: str, forced_conf: float) -> tuple:
+def _run_explanation_method(
+    method: str,
+    paragraph_id: str,
+    user_text: str,
+    forced_label: str,
+    forced_conf: float,
+) -> tuple:
+    cached = get_cached_explanation(paragraph_id, method)
+    if cached:
+        return None, cached
+
     if method == "SHAP":
         model_result = explain_with_shap(user_text)
         _override_prediction(model_result, forced_label, forced_conf)
         _, _, generate_explanation = _get_shap_pipeline()
         explanation = generate_explanation(user_text, model_result)
+        save_explanation(paragraph_id, method, explanation)
         return model_result, explanation
 
     if method == "RAG":
@@ -424,6 +446,7 @@ def _run_explanation_method(method: str, user_text: str, forced_label: str, forc
         model_result = rag_pipeline(user_text)
         _override_prediction(model_result, forced_label, forced_conf)
         explanation = generate_explanation(user_text, model_result)
+        save_explanation(paragraph_id, method, explanation)
         return model_result, explanation
 
     if method == "HYBRID":
@@ -434,6 +457,7 @@ def _run_explanation_method(method: str, user_text: str, forced_label: str, forc
         if hasattr(model_result, "rag_result") and model_result.rag_result:
             _override_prediction(model_result.rag_result, forced_label, forced_conf)
         explanation = generate_explanation(user_text, model_result)
+        save_explanation(paragraph_id, method, explanation)
         return model_result, explanation
 
     generate_counterfactuals, _, generate_explanation, _ = _get_cf_pipeline()
@@ -441,13 +465,14 @@ def _run_explanation_method(method: str, user_text: str, forced_label: str, forc
     if hasattr(model_result, "pred_label"):
         _override_prediction(model_result, forced_label, forced_conf)
     explanation = generate_explanation(user_text, model_result)
+    save_explanation(paragraph_id, method, explanation)
     return model_result, explanation
 
 
 async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
     queue = context.user_data.get("sample_queue") or []
     if not queue:
-        await _send_message(update, context, _format_box("⭐️Rating", "Study complete. Type /begin to start again."))
+        await _send_message(update, context, _format_box("Study complete. Type /begin to start again."))
         return
 
     selected_paragraph = queue.pop(0)
@@ -458,7 +483,7 @@ async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
     paragraph_text = selected_paragraph["text"]
     paragraph_severity = selected_paragraph["severity"]
 
-    label, conf = _prediction_from_text(paragraph_text)
+    label, conf = _prediction_from_text(paragraph_id, paragraph_text)
     methods = _pick_explanation_methods()
 
     context.user_data["current_paragraph_id"] = paragraph_id
@@ -478,8 +503,8 @@ async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _send_message(update, context, _format_box("🤖Prediction", f"Prediction : {label}"))
     await _pause()
 
-    _, explanation_1 = _run_explanation_method(methods[0], paragraph_text, label, conf)
-    _, explanation_2 = _run_explanation_method(methods[1], paragraph_text, label, conf)
+    _, explanation_1 = _run_explanation_method(methods[0], paragraph_id, paragraph_text, label, conf)
+    _, explanation_2 = _run_explanation_method(methods[1], paragraph_id, paragraph_text, label, conf)
 
     context.user_data["pending_explanations"] = [
         (methods[0], explanation_1),
