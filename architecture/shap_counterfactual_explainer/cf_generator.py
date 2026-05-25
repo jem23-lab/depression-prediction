@@ -134,7 +134,12 @@ def _evaluate_candidate(
         score = 1.0 + 0.5 * minimality + 0.5 * semantic_sim
     else:
         label_order = {"severe": 0, "moderate": 1, "not depression": 2}
-        movement    = label_order.get(cf_label, 0) - label_order.get(original_label, 0)
+        orig_pos = label_order.get(original_label, 0)
+        cf_pos = label_order.get(cf_label, 0)
+        target_pos = label_order.get(target_label, 0)
+        # positive when moving toward target, negative when moving away
+        movement = (cf_pos - orig_pos) * (1 if target_pos > orig_pos else -1)
+        # movement    = label_order.get(cf_label, 0) - label_order.get(original_label, 0)
         score       = max(0.0, 0.3 * movement / 2 + 0.2 * minimality)
 
     return {
