@@ -300,20 +300,20 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         },
     )
 
-    await reply_message.reply_text(
-        _format_box(
-            "Thanks. Your evaluation has been saved.\n"
-            f"Scores -> Clarity: {ratings['clarity']}, Correctness: {ratings['correctness']}, Helpfulness: {ratings['helpfulness']}, Trust: {ratings['trust']}\n"
-            f"Average: {avg:.2f}",
-        ),
-        parse_mode="HTML",
-    )
     context.user_data.pop("eval_flow", None)
 
     pending = context.user_data.get("pending_explanations") or []
     pending_idx = context.user_data.get("pending_index", 0)
 
     if pending_idx + 1 < len(pending):
+        await reply_message.reply_text(
+            _format_box(
+                "Thanks for your feedback! 😊\n"
+                "Your evaluation has been saved successfully.\n"
+                "We’re now showing the second explanation.",
+            ),
+            parse_mode="HTML",
+        )
         context.user_data["pending_index"] = pending_idx + 1
         await _pause()
         method, explanation = pending[pending_idx + 1]
@@ -542,20 +542,19 @@ async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def _evaluation_prompt(paragraph_text: str, explanation: str, ratings: dict, step: int) -> str:
-    criteria_lines = [
-        "Rate the assistant's explanation based on:",
+    if step >= len(EVAL_CRITERIA):
+        summary_lines = [
+            f"- {label}: {ratings.get(key)}" for key, label in EVAL_CRITERIA
+        ]
+        return _format_box("⭐️Rating", "\n".join(summary_lines))
+
+    _, label = EVAL_CRITERIA[step]
+    body_lines = [
+        f"{label}",
         "",
+        f"Tap {label} score (1-5).",
     ]
-    for key, label in EVAL_CRITERIA:
-        value = ratings.get(key)
-        criteria_lines.append(f"- {label}: {'[pending]' if value is None else value}")
-
-    if step < len(EVAL_CRITERIA):
-        _, label = EVAL_CRITERIA[step]
-        criteria_lines.append("")
-        criteria_lines.append(f"Tap {label} score (1-5).")
-
-    return _format_box("⭐️Rating", "\n".join(criteria_lines))
+    return _format_box("⭐️Rating", "\n".join(body_lines))
 
 
 # ── Use Case 1: SHAP ─────────────────────────────────────────────────
