@@ -129,10 +129,11 @@ async def _send_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text
     )
 
 
-def _format_box(title: str, body: str, width: int = 48) -> str:
+def _format_box(title: str, body: str = "", width: int = 48) -> str:
     line = "=" * width
     divider = "-" * width
-    return f"\n{line}\n{title}\n{divider}\n{body}\n{line}\n"
+    safe_body = body or ""
+    return f"\n{line}\n{title}\n{divider}\n{safe_body}\n{line}\n"
 
 
 def _format_title(base: str, label: str = "") -> str:
@@ -287,7 +288,6 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "session_id": flow["session_id"],
             "paragraph_id": flow["paragraph_id"],
             "paragraph_text": flow["paragraph_text"],
-            "selected_use_case": flow["selected_use_case"],
             "selected_use_case_name": flow["selected_use_case_name"],
             "prediction_label": flow["prediction_label"],
             "prediction_confidence": flow["prediction_confidence"],
