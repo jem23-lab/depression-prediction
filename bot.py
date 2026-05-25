@@ -809,7 +809,8 @@ async def _on_startup(app: Application):
 
 
 def main():
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    # token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    token = "8701368346:AAGzoDU6gRctD3dWgDuWUzjOmfAK7Ln-JtA"
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set.")
 
