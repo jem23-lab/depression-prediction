@@ -103,7 +103,7 @@ async def safe_send(update: Update, text: str, chunk_size: int = 4000):
 
 async def send_footer(update: Update):
     await update.message.reply_text(
-        "─────────────────────────────\n"
+        "================================================\n"
         "Type /begin to start a new session."
     )
 
@@ -131,9 +131,9 @@ async def _send_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text
 
 def _format_box(title: str, body: str = "", width: int = 48) -> str:
     line = "=" * width
-    divider = "-" * width
     safe_body = body or ""
-    return f"\n{line}\n{title}\n{divider}\n{safe_body}\n{line}\n"
+    title_line = f"{title}\n\n" if title else ""
+    return f"{title_line}{safe_body}\n{line}\n"
 
 
 def _format_title(base: str, label: str = "") -> str:
@@ -143,6 +143,8 @@ def _format_title(base: str, label: str = "") -> str:
 def _format_for_display(text: str) -> str:
     if not text:
         return text
+
+    text = re.sub(r"\s+", " ", text).strip()
 
     markers = [
         "To cope",
@@ -317,10 +319,17 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         context.user_data["pending_index"] = pending_idx + 1
         await _pause()
         method, explanation = pending[pending_idx + 1]
+        sample_number = context.user_data.get("sample_index", 1)
         await _send_message(
             update,
             context,
-            _format_box("💡Explanation B", explanation),
+            _format_box(
+                _format_title(
+                    "2nd Explanation for Person",
+                    f"{sample_number} (Why AI did this prediction ? )",
+                ),
+                explanation,
+            ),
         )
         await _pause()
 
@@ -366,7 +375,10 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if context.user_data.get("sample_queue"):
         await reply_message.reply_text(
-            _format_box("Proceeding to the next text sample..."),
+            _format_box(
+                "✨ Moving to the next text sample...\n"
+                "Thank you for taking part in the evaluation."
+            ),
             parse_mode="HTML",
         )
         await _run_next_sample(update, context)
@@ -497,11 +509,19 @@ async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _send_message(
         update,
         context,
-        _format_box(_format_title("📄Text Sample", str(sample_number)), _format_for_display(paragraph_text)),
+        _format_box(
+            _format_title("📝 Text Sample (Person", f"{sample_number})"),
+            _format_for_display(paragraph_text),
+        ),
     )
     await _pause()
 
-    await _send_message(update, context, _format_box("🤖Prediction", f"Prediction : {label}"))
+    label_sentence = (
+        f"Person {sample_number} does not show signs of depression."
+        if label == "not depression" else
+        f"Person {sample_number} shows signs of {label} depression."
+    )
+    await _send_message(update, context, _format_box("🤖Prediction", label_sentence))
     await _pause()
 
     _, explanation_1 = _run_explanation_method(methods[0], paragraph_id, paragraph_text, label, conf)
@@ -513,7 +533,14 @@ async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     context.user_data["pending_index"] = 0
 
-    await _send_message(update, context, _format_box("💡Explanation A", explanation_1))
+    await _send_message(
+        update,
+        context,
+        _format_box(
+            _format_title(f"1st Explanation for Person", f"{sample_number} (Why AI did this prediction ? )"),
+            explanation_1,
+        ),
+    )
     await _pause()
 
     context.user_data["eval_flow"] = {
@@ -546,15 +573,17 @@ def _evaluation_prompt(paragraph_text: str, explanation: str, ratings: dict, ste
         summary_lines = [
             f"- {label}: {ratings.get(key)}" for key, label in EVAL_CRITERIA
         ]
-        return _format_box("⭐️Rating", "\n".join(summary_lines))
+        return _format_box("⭐ Please Rate This Explanation", "\n".join(summary_lines))
 
     _, label = EVAL_CRITERIA[step]
     body_lines = [
+        "Please answer the following questions based on your experience:",
+        "",
         f"{label}",
         "",
         f"Tap {label} score (1-5).",
     ]
-    return _format_box("⭐️Rating", "\n".join(body_lines))
+    return _format_box("⭐ Please Rate This Explanation", "\n".join(body_lines))
 
 
 # ── Use Case 1: SHAP ─────────────────────────────────────────────────
