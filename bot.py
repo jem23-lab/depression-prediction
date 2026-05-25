@@ -364,17 +364,16 @@ async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context.user_data.pop("current_prediction_label", None)
     context.user_data.pop("current_prediction_confidence", None)
 
-    await reply_message.reply_text(
-        _format_box( "Proceeding to the next text sample..."),
-        parse_mode="HTML",
-    )
-
     if context.user_data.get("sample_queue"):
+        await reply_message.reply_text(
+            _format_box("Proceeding to the next text sample..."),
+            parse_mode="HTML",
+        )
         await _run_next_sample(update, context)
         return True
 
     await reply_message.reply_text(
-        _format_box("Study complete. Type /begin to start again."),
+        _format_box("Study complete. Thank you for participating 🙇🏻. "),
         parse_mode="HTML",
     )
     return True
@@ -431,6 +430,8 @@ def _run_explanation_method(
 ) -> tuple:
     cached = get_cached_explanation(paragraph_id, method)
     if cached:
+        console_log = f"Using cached explanation for paragraph {paragraph_id} with method {method}"
+        logger.info(console_log)
         return None, cached
 
     if method == "SHAP":
@@ -472,7 +473,7 @@ def _run_explanation_method(
 async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
     queue = context.user_data.get("sample_queue") or []
     if not queue:
-        await _send_message(update, context, _format_box("Study complete. Type /begin to start again."))
+        await _send_message(update, context, _format_box("Study complete. Thank you for participating."))
         return
 
     selected_paragraph = queue.pop(0)
