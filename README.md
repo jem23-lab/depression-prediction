@@ -114,6 +114,20 @@ Saved CSV columns:
 - `rating_helpfulness`
 - `rating_overall_avg`
 
+## Cache explanations
+
+Use this script to precompute and cache missing explanations in `shared/training_examples.py`. It skips any explanation that is already present.
+
+```zsh
+python scripts/cache_explanations.py --dry-run
+python scripts/cache_explanations.py --methods SHAP,RAG --limit 5
+python scripts/cache_explanations.py --only-ids daic_woz_severe_321,daic_woz_no_depression_312
+```
+
+Optional flags:
+- `--save-pred` to store `prediction_label` and `prediction_confidence` if missing.
+- `--dry-run` to print what would be generated without calling any models.
+
 ## Run
 
 ```bash

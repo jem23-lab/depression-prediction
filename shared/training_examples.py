@@ -194,10 +194,7 @@ PARAGRAPHS = [
         'severity': 'severe',
         'text': (
             """\
-                                                                        Lately, I’ve been feeling deeply depressed and weighed down by worries. My life feels heavy; I had to settle for a retail job because I couldn't find work in my field, and my daughter is currently battling cancer, leaving me frustrated and anxious. I haven't had a good night's sleep in a year, waking up every few hours. This severe fatigue leaves me groggy, lacking energy, and struggling to concentrate, causing me to forget things and make mistakes at work. I’ve experienced a painful shift in my social functioning and interests; I haven't gone out to dinner with a close friend in over a year. My self-worth is low—I don't know my best qualities and regret my lack of education— and my appetite is disrupted.Though I find moments of pure joy playing with my granddaughter, I mostly feel trapped by sadness and failure, coping by keeping quiet when struggling.
-        
-        
-        
+                        Lately, I’ve been feeling deeply depressed and weighed down by worries. My life feels heavy; I had to settle for a retail job because I couldn't find work in my field, and my daughter is currently battling cancer, leaving me frustrated and anxious. I haven't had a good night's sleep in a year, waking up every few hours. This severe fatigue leaves me groggy, lacking energy, and struggling to concentrate, causing me to forget things and make mistakes at work. I’ve experienced a painful shift in my social functioning and interests; I haven't gone out to dinner with a close friend in over a year. My self-worth is low—I don't know my best qualities and regret my lack of education— and my appetite is disrupted.Though I find moments of pure joy playing with my granddaughter, I mostly feel trapped by sadness and failure, coping by keeping quiet when struggling.
         
         
         """),
@@ -210,6 +207,15 @@ The language you used, such as **quiet**, hints at holding emotions inside, whic
 
 These particular words helped the tool weigh the overall picture, highlighting the intensity of the struggle you’re experiencing. For example
         """),
+        'RAG_explanation': (
+            """\
+            The assessment indicates a **severe** level of depression.
+
+Your words highlight three key patterns:  
+You say you are **deeply depressed and weighed down by worries**, which shows how persistent sadness is affecting your daily life.  
+You mention that **you haven’t had a good night’s sleep in a year, waking up every few hours**, pointing to ongoing fatigue that makes work and memory harder.  
+Finally, you note that **your self-worth is low—you don’t know your best qualities**, reflecting a lasting sense of worthlessness that is central to depression.
+        """),
         'COUNTERFACTUAL_explanation': (
             """\
             Your screening result is **severe**.
@@ -218,17 +224,21 @@ The words that pushed the model toward the severe label were **quiet**, **sadnes
 
 If the message had said, *“I still keep in touch with friends and feel hopeful sometimes”* instead of *“I’ve been quiet and left everything behind,”* the assessment might have shifted toward a moderate level.
         """),
+        'HYBRID_explanation': (
+            """\
+            The system has flagged your situation as **severe** depression.  
+This assessment comes mainly from phrases like **“trapped by sadness”** and **“daughter battling cancer,”** which signal persistent heavy feelings and significant life stress.  The repeated mention of disrupted sleep and low energy also points to a lasting, daily burden.
+
+If the text had said **“I feel a bit down”** instead of **“I feel deeply depressed,”** the outcome would likely shift toward a lighter level because the word “deeply” is a stronger risk flag. The focus here is on how specific expressions shape the prediction, not on next steps.
+        """),
     },
     {
         'id': 'daic_woz_severe_346',
         'severity': 'severe',
         'text': (
             """\
-                                                                        Lately, I’ve been feeling really sad, stressed, and miserable, carrying a severe heaviness from my past hardships and trauma. Sleeping is incredibly difficult; I lie awake dwelling on stressors or wake up shaking from intense nighttime panic attacks and vivid nightmares. This constant insomnia leaves me completely exhausted, moody, and struggling with severe fatigue, poor concentration, and a disrupted appetite. My self-worth is low—I often forget my good qualities, regret past choices like my last marriage, and feel a deep sense of failure. Socially, my family can be judgmental, and though I have a loving boyfriend, I struggle with an internal urge to withdraw. I have to forcefully push myself to attend auditions or make it to appointments because a part of me just wants to hide away. While I try to survive and stay busy to avoid feeling that life isn't worth it, everything feels like an agonizing struggle.
-        
-        
-        
-        
+                         Lately, I’ve been feeling really sad, stressed, and miserable, carrying a severe heaviness from my past hardships and trauma. Sleeping is incredibly difficult; I lie awake dwelling on stressors or wake up shaking from intense nighttime panic attacks and vivid nightmares. This constant insomnia leaves me completely exhausted, moody, and struggling with severe fatigue, poor concentration, and a disrupted appetite. My self-worth is low—I often forget my good qualities, regret past choices like my last marriage, and feel a deep sense of failure. Socially, my family can be judgmental, and though I have a loving boyfriend, I struggle with an internal urge to withdraw. I have to forcefully push myself to attend auditions or make it to appointments because a part of me just wants to hide away. While I try to survive and stay busy to avoid feeling that life isn't worth it, everything feels like an agonizing struggle. 
+             
         
         """),
         'prediction_confidence': 0.7591856923885394,
@@ -266,15 +276,16 @@ For example, if the message said “I get good sleep” instead of “I lie awak
         'severity': 'severe',
         'text': (
             """\
-                                                                        Lately, I’ve been feeling so tired, sad, depressed, and blue. I was diagnosed with depression about a year ago because I just couldn't pull myself out of it, and right now, I’m simply not happy. My sleep is terrible—I barely sleep at all, which leaves me feeling crazy, distracted, and struggling to cope with even mundane daily things. This severe lack of motivation, energy, and low self-worth makes me feel like I'm not my usual self. Even my appetite has been completely disrupted. To cope, I’ve started staying to myself and withdrawing, not going out with friends like I used to. My new relationship has lost its spark and just feels okay now, and the cold weather easily brings me down. Although going to therapy helps me get things off my chest, and I still feel proud and fulfilled by my children, everyday life currently feels like an overwhelming weight.
-        
-        
-        
+                         Lately, I’ve been feeling so tired, sad, depressed, and blue. I was diagnosed with depression about a year ago because I just couldn't pull myself out of it, and right now, I’m simply not happy. My sleep is terrible—I barely sleep at all, which leaves me feeling crazy, distracted, and struggling to cope with even mundane daily things. This severe lack of motivation, energy, and low self-worth makes me feel like I'm not my usual self. Even my appetite has been completely disrupted. To cope, I’ve started staying to myself and withdrawing, not going out with friends like I used to. My new relationship has lost its spark and just feels okay now, and the cold weather easily brings me down. Although going to therapy helps me get things off my chest, and I still feel proud and fulfilled by my children, everyday life currently feels like an overwhelming weight.
         
         
         """),
         'prediction_confidence': 0.6679306370944829,
         'prediction_label': 'severe',
+        'SHAP_explanation': (
+            """\
+            Your screening indicates **severe** depression. The AI highlighted words like **barely**, **blue**, and **cope**. **Barely** spotlights the very limited sleep you described, a strong sign of how deep the feeling of exhaustion is. **Blue** captures the ongoing low mood you’re experiencing. **Cope** shows how tough it has become to handle everyday tasks. These phrases together pushed the assessment toward a serious level. The system also noted lighter words—like **me** and **proud**—which add some context but didn’t shift the overall picture.
+        """),
         'RAG_explanation': (
             """\
             The model indicates a **severe** level of depression.  
@@ -301,10 +312,7 @@ If the wording had said “I’m **happy** instead of **blue**,” it would sugg
         'severity': 'severe',
         'text': (
             """\
-                                                                        Lately, I’ve been feeling so-so, run down, and a bit stressed, struggling with ongoing depression, lack of interest, and too many regrets weighing on my mind. Sleep is never easy and always bad, leaving me tired, lethargic, and without energy. It makes it incredibly hard to keep my thoughts in order or manage the absolute basics of my day. My appetite has also been severely disrupted. Because of my past trauma from a near-fatal stalker attack, I find myself battling complex cognitive and emotional patterns. To cope, I actively use the proactive tools from therapy and reach out to others rather than isolating myself. While I try to stay rational, calm, and reliable, I can't even remember the last time I felt genuinely happy. Despite these severe struggles with self-worth and exhaustion, my children remain my greatest pride, and working with animals still brings a brief smile to my face.
-        
-        
-        
+                         Lately, I’ve been feeling so-so, run down, and a bit stressed, struggling with ongoing depression, lack of interest, and too many regrets weighing on my mind. Sleep is never easy and always bad, leaving me tired, lethargic, and without energy. It makes it incredibly hard to keep my thoughts in order or manage the absolute basics of my day. My appetite has also been severely disrupted. Because of my past trauma from a near-fatal stalker attack, I find myself battling complex cognitive and emotional patterns. To cope, I actively use the proactive tools from therapy and reach out to others rather than isolating myself. While I try to stay rational, calm, and reliable, I can't even remember the last time I felt genuinely happy. Despite these severe struggles with self-worth and exhaustion, my children remain my greatest pride, and working with animals still brings a brief smile to my face.
         
         
         """),
@@ -344,15 +352,23 @@ If the message had said something like “I am feeling happy and full of energy�
         'severity': 'severe',
         'text': (
             """\
-                                                                        Lately, I feel pensive and down, carrying a heavy sense of hopelessness, severe depression, and a total loss of interest in life. Since losing my job and moving to LA, I feel like a complete failure who can't get back on my feet, leading to estrangement from my family and friends. I constantly dwell on past mistakes, especially a failed relationship that spiraled out of control, directing my anger inward with intense guilt. My mind is always overwhelmed; everything triggers painful memories, forcing me to double-task to keep my brain occupied, though concentrating remains extremely difficult. Physically, I am plagued by light, restless sleep, low energy, and appetite issues. To cope with this emotional instability and stay sober, I attend AA meetings to put my formless pain into words. I wonder if I'll ever feel like a normal, happy person again, remembering a Christmas years ago when life felt whole.
-        
-        
-        
+                         Lately, I feel pensive and down, carrying a heavy sense of hopelessness, severe depression, and a total loss of interest in life. Since losing my job and moving to LA, I feel like a complete failure who can't get back on my feet, leading to estrangement from my family and friends. I constantly dwell on past mistakes, especially a failed relationship that spiraled out of control, directing my anger inward with intense guilt. My mind is always overwhelmed; everything triggers painful memories, forcing me to double-task to keep my brain occupied, though concentrating remains extremely difficult. Physically, I am plagued by light, restless sleep, low energy, and appetite issues. To cope with this emotional instability and stay sober, I attend AA meetings to put my formless pain into words. I wonder if I'll ever feel like a normal, happy person again, remembering a Christmas years ago when life felt whole.
         
         
         """),
         'prediction_confidence': 0.7093200663893708,
         'prediction_label': 'severe',
+        'SHAP_explanation': (
+            """\
+            The assessment says your symptoms are **severe depression**.  
+The tool looked for clues that point to strong feelings of despair and isolation. In your own words, the phrase **failure** highlights how you see yourself negatively after losing your job, while **estrangement** shows the painful distance that’s growing between you and your family and friends. These signals flag a higher level of distress, leading the model to determine a **severe** outcome.
+        """),
+        'RAG_explanation': (
+            """\
+            The system identified your situation as **severe**. That means the symptoms you’re describing are intense and persistent, affecting many parts of your daily life.
+
+You mentioned **“a heavy sense of hopelessness”**—this reflects deep, daily sadness that feels almost impossible to shake off. You also say **“I feel like a complete failure,”** which shows a strong feeling of worthlessness that can pull you away from people and activities. Finally, you describe a **“total loss of interest in life,”** indicating that things you used to enjoy no longer bring pleasure or motivation. These key feelings match the main markers the tool looks for when it says “severe.”
+        """),
         'COUNTERFACTUAL_explanation': (
             """\
             Your screening result shows **SEVERE** depression. The assessment was pulled mainly from phrases like **severe depression**, **hopelessness**, and **estrangement**. These words signal a strong sense of despair, loss of motivation, and social isolation—symptoms that the model treats as high‑level indicators of deep emotional distress. The presence of these terms together increases the overall signal that the person is experiencing intense, persistent difficulty. These words align with clinical markers of mood disorders, showing a sustained negative outlook and isolation that clinicians flag when diagnosing.
@@ -371,10 +387,7 @@ Additionally, if the text had said **success** instead of **failure**, the messa
         'severity': 'severe',
         'text': (
             """\
-                                                                        Lately, I’ve been feeling not good at all, carrying a deep sense of depression and hopelessness. Since being released from prison, I feel older, overwhelmed by responsibilities, and like my life isn't where it's supposed to be, which leaves me struggling with self-worth and feeling sorry for myself. Sleep is never easy, and I am plagued by severe restlessness, severe low energy, and appetite disruption. My concentration is impaired, making it hard to focus, yet I remain fully determined not to give up. Because of past traumas and my PTSD diagnosis, I sometimes experience intense emotional instability and flashbacks of past violence, fights, and shootouts that inhibit me. To cope, I actively rely on therapy, which teaches me to step back and rationally assess situations instead of reacting purely on emotion. Although I still enjoy music and social gatherings, true happiness feels far away, anchored in memories of mutual love.
-        
-        
-        
+                        Lately, I’ve been feeling not good at all, carrying a deep sense of depression and hopelessness. Since being released from prison, I feel older, overwhelmed by responsibilities, and like my life isn't where it's supposed to be, which leaves me struggling with self-worth and feeling sorry for myself. Sleep is never easy, and I am plagued by severe restlessness, severe low energy, and appetite disruption. My concentration is impaired, making it hard to focus, yet I remain fully determined not to give up. Because of past traumas and my PTSD diagnosis, I sometimes experience intense emotional instability and flashbacks of past violence, fights, and shootouts that inhibit me. To cope, I actively rely on therapy, which teaches me to step back and rationally assess situations instead of reacting purely on emotion. Although I still enjoy music and social gatherings, true happiness feels far away, anchored in memories of mutual love.
         
         
         """),
@@ -413,12 +426,37 @@ If the message said “I feel fine” instead of “I feel not good at all,” t
         'severity': 'severe',
         'text': (
             """\
-                                                                        Lately, I’ve been feeling very stressed, moody, and irritable, with my mind constantly jumping from one thought to another, making concentration incredibly difficult. My son’s incarceration has been a devastating stressor, leaving me feeling deeply depressed and hopeless. Between worrying about my children and having racing thoughts, getting a good night’s sleep is nearly impossible, leaving me completely exhausted with very low energy. My appetite is significantly disrupted, and I struggle with feelings of failure and self-worth regarding marital arguments and parenting mistakes. Despite being naturally outgoing, I tend to withdraw and avoid talking entirely when upset, hiding my emotions. To cope and relax, I design jewelry. Though I heavily relied on therapy, losing my therapist due to funding cuts has left me to navigate this emotional instability completely alone. I try to remain a compassionate go-getter for my family, but right now, finding genuine happiness is a real struggle.
+                         Lately, I’ve been feeling very stressed, moody, and irritable, with my mind constantly jumping from one thought to another, making concentration incredibly difficult. My son’s incarceration has been a devastating stressor, leaving me feeling deeply depressed and hopeless. Between worrying about my children and having racing thoughts, getting a good night’s sleep is nearly impossible, leaving me completely exhausted with very low energy. My appetite is significantly disrupted, and I struggle with feelings of failure and self-worth regarding marital arguments and parenting mistakes. Despite being naturally outgoing, I tend to withdraw and avoid talking entirely when upset, hiding my emotions. To cope and relax, I design jewelry. Though I heavily relied on therapy, losing my therapist due to funding cuts has left me to navigate this emotional instability completely alone. I try to remain a compassionate go-getter for my family, but right now, finding genuine happiness is a real struggle.
         
         
-        
-        
-        
+        """),
+        'SHAP_explanation': (
+            """\
+            Your assessment shows a **severe** level of distress.  
+The word **entirely** together with **avoid** highlights a strong pull‑back from talking, which often signals deep emotional strain. Mentioning **children** shows that the worry is not only personal but also about your loved ones, adding to the overall burden.
+
+These indicators combine to suggest that the emotional load is heavy, making it hard to stay calm or sleep, and making it more likely that depression could worsen. When racing thoughts keep the mind busy, it adds pressure and can make emotional distress feel overwhelming. That is why the AI rated the risk as severe.
+        """),
+        'RAG_explanation': (
+            """\
+            Your results show a **severe** level of difficulty. The assessment found three main themes: a low sense of worth, everyday sadness, and a loss of excitement in activities.
+
+The message includes phrases like **Lately, I’ve been feeling very stressed, moody, and irritable**, which point to a heavy, everyday sadness; the impact of **my son’s incarceration**, which adds feelings of helplessness and guilt; and the note that **getting a good night’s sleep is nearly impossible**, showing how exhausted and restless the situation feels. These clues helped the screen label each theme strongly.
+        """),
+        'COUNTERFACTUAL_explanation': (
+            """\
+            Your screening result is **severe**.
+
+The model was especially drawn to a few phrases.  The word **“entirely”** signals deep isolation, while saying you **“avoid talking”** shows you are pulling away from others—a key warning sign.  The mention of **“instability”** in your emotions signals that the worries and mood shifts are ongoing and intense, which the system sees as a stronger red flag.
+
+If the message had said “I usually talk to people about my feelings instead of withdrawing” instead of saying you **avoid** talking, the result might have been lighter, because it would suggest you are reaching out rather than staying isolated.
+        """),
+        'HYBRID_explanation': (
+            """\
+            The assessment indicates a **severe** level of depression.  
+Key words that pushed the result higher include **“deeply depressed and hopeless”**, **“withdraw and avoid talking”**, and **“low energy.”** These phrases show intense sadness and thoughts of worthlessness, show a clear pattern of cutting off social contact when upset, and reveal a persistent lack of vitality—all classic signs that the condition is serious.
+
+If the message had said “somewhat depressed” instead of “deeply depressed,” the overall message would likely feel less intense, which could bring the prediction down to a moderate level. The same kind of change with “withdraw” becoming “stay in touch” would also lessen the severity signal.
         """),
     },
     {
@@ -426,11 +464,8 @@ If the message said “I feel fine” instead of “I feel not good at all,” t
         'severity': 'moderate',
         'text': (
             """\
-                                                                        Lately, I’ve been feeling down and not like myself, struggling with a persistent sense of lethargy and low energy that often leaves me lying around. Since being diagnosed with depression a year ago, I face a regular loss of interest in activities, though watching USC football can still lift my spirits. My sleep is frequently disrupted, leaving me irritable and cranky, and I notice regular appetite changes. Almost daily, I face severe concentration difficulties. As an honest, straightforward person, I try to remove myself from annoying situations, but I carry many regrets about my past and a subtle sense of failure. Being currently unemployed and facing health and financial limitations has heavily restricted my life, and after recently losing my father—my last living parent—it’s been a long time since I felt truly happy. I remain deeply proud of my four adult children, though I constantly worry about them.
-        
-        
-        
-        
+                        Lately, I’ve been feeling down and not like myself, struggling with a persistent sense of lethargy and low energy that often leaves me lying around. Since being diagnosed with depression a year ago, I face a regular loss of interest in activities, though watching USC football can still lift my spirits. My sleep is frequently disrupted, leaving me irritable and cranky, and I notice regular appetite changes. Almost daily, I face severe concentration difficulties. As an honest, straightforward person, I try to remove myself from annoying situations, but I carry many regrets about my past and a subtle sense of failure. Being currently unemployed and facing health and financial limitations has heavily restricted my life, and after recently losing my father—my last living parent—it’s been a long time since I felt truly happy. I remain deeply proud of my four adult children, though I constantly worry about them.
+      
         
         """),
         'prediction_confidence': 0.6837418589917877,
@@ -441,11 +476,24 @@ If the message said “I feel fine” instead of “I feel not good at all,” t
 
 The system highlighted a few words you used that carry extra weight. The phrase **lethargy**, for example, points to a common feeling of being unusually tired. **Low energy** describes that same lack of spark about everyday life, while **severe concentration difficulties** shows trouble staying focused. When these three symptoms show up together, the system sees a pattern that matches what is typically seen in moderate depression – a cluster of tiredness, loss of interest, and struggling to think clearly. These particular terms helped the algorithm raise the risk signal, leading to the moderate result.
         """),
+        'RAG_explanation': (
+            """\
+            The AI identified a moderate level of depression based on the details you shared. For example, your mention that **Lately, I’ve been feeling down and not like myself** shows persistent sadness. Noting that **I face a regular loss of interest in activities** points to a low mood. When you say **Almost daily, I face severe concentration difficulties**, that captures the difficulty concentrating seen in depression.
+
+These patterns are typical markers that suggest you might be more than just a temporary low. Understanding the mix of how you feel, how it affects your days, and the thoughts you’re carrying can help explain why the assessment rates it as moderate.
+        """),
         'COUNTERFACTUAL_explanation': (
             """\
             Your reply was interpreted as a moderate level of depression. The system gave extra weight to a few terms that repeated the pattern of stress. For example, **spirits** indicates fluctuating mood, **lethargy** points to a drop in energy, and the phrase **regular loss** highlights a persistent lack of interest. Those cues together raised the moderate flag. These clues echo what clinicians see when someone has a steady low energy, ongoing loss of interest, and mood swings. They point to symptoms that persist over time but are not extreme.
 
 If the text had said **I feel more energetic now** instead of **persistent sense of lethargy**, the prediction could lean toward a lower level.
+        """),
+        'HYBRID_explanation': (
+            """\
+            Your screen‑reading tool says you’re in the **moderate** range of depression.  
+The words that swayed the result were **“lethargy,” “loss of interest,”** and **“concentration difficulties.”** These phrases are strong clues that mood, energy, and thinking are all being affected, which is why the system leaned toward a moderate label.
+
+If the message had said they “sometimes feel tired” instead of “persistent lethargy,” or that they only “rarely lose interest,” the assessment would likely have shifted toward a lighter level. The overall pattern—how often these feelings appear—helps the model decide where you fall.
         """),
     },
     {
@@ -453,10 +501,7 @@ If the text had said **I feel more energetic now** instead of **persistent sense
         'severity': 'moderate',
         'text': (
             """\
-                                                                        I describe myself as an introverted, patient, and curious student pursuing biological sciences. While I often tell others I’m doing well, I frequently feel down and overwhelmed by the daunting challenges ahead, and I am honestly not sure when I last felt truly happy. Privately, I struggle almost daily with severe feelings of failure, self-worth issues, and significant appetite changes. My concentration remains unaffected, but more than half the time, I experience a noticeable sense of restlessness or physical slowing. I also cope with occasional low energy, a mild loss of interest, and difficulty falling asleep, which leaves me feeling nervous and forgetful. Being an introvert, I handle these burdens by withdrawing into solitary coping behaviors like reading, listening to music, and taking night walks. Although I am proud of my academic achievements and have a supportive mentor, navigating these hidden emotional struggles feels very hard.
-        
-        
-        
+                         I describe myself as an introverted, patient, and curious student pursuing biological sciences. While I often tell others I’m doing well, I frequently feel down and overwhelmed by the daunting challenges ahead, and I am honestly not sure when I last felt truly happy. Privately, I struggle almost daily with severe feelings of failure, self-worth issues, and significant appetite changes. My concentration remains unaffected, but more than half the time, I experience a noticeable sense of restlessness or physical slowing. I also cope with occasional low energy, a mild loss of interest, and difficulty falling asleep, which leaves me feeling nervous and forgetful. Being an introvert, I handle these burdens by withdrawing into solitary coping behaviors like reading, listening to music, and taking night walks. Although I am proud of my academic achievements and have a supportive mentor, navigating these hidden emotional struggles feels very hard.
         
         
         """),
@@ -471,6 +516,12 @@ The assessment is mainly driven by the ways you describe your feelings and copin
             """\
             Your screening indicated a moderate level of depressive symptoms. The report points to three main areas. The statement about **severe feelings of failure, self-worth issues** shows a strong sense of not feeling worthy and feeling like a disappointment, which matches low self‑worth. The line about **frequently feel down and overwhelmed** refers to feelings of sadness and stress every day, aligning with a depressed mood. Finally, mentioning a **mild loss of interest** indicates that activities that used to bring pleasure no longer do, matching anhedonia. Together, these patterns explain why the system placed you in the moderate range.
         """),
+        'COUNTERFACTUAL_explanation': (
+            """\
+            Your recent reply was classified as **moderate**. Words like **severe feelings of failure**, **appetite changes**, and **restlessness or slowing** point to common signs that people often describe when they are feeling depressed. These expressions show a pattern that the screening tool recognizes as moderate risk, especially when combined with the sense of being overwhelmed and withdrawing into solitary activities. 
+
+If the message had instead said “I feel energized and looking forward to upcoming projects” while keeping the rest the same, the assessment would likely lean toward a lower risk level. Because these signals match known signs of depression, the result is not a diagnosis but an indication to consider further discussion.
+        """),
         'HYBRID_explanation': (
             """\
             Your result was labeled **moderate**. The assessment leans on a few everyday phrases that signal common depressive patterns. The line **feel down** indicates a persistent sadness, the mention of **severe feelings of failure** points to low self‑worth, and **solitary** shows a tendency to withdraw from social interaction. These three clues together steer the outcome toward the moderate category. Protective cues—like saying you’re proud of your work or that you have a supportive mentor—also appear, but they don’t fully offset the stronger risk signals.
@@ -483,10 +534,7 @@ If the message said “I’m feeling energized and happy” instead of “feel d
         'severity': 'moderate',
         'text': (
             """\
-                                                                        As an extroverted and creative actor, I’m usually an open book, but moving back to Los Angeles against my will to care for my sick father has been incredibly stressful, especially living with him and my brother in a hoarding environment. Lately, this situation has manifested in distressing, out-of-control stress dreams nearly every day, alongside severe, near-daily appetite disruptions. More than half the time, I contend with persistent fatigue and low energy, which weighs heavily on me. On several days, I find myself feeling down and mildly hopeless about my father's illness, struggling with intermittent concentration difficulties and a slight loss of interest in my regular activities. I also experience occasional self-worth issues, particularly with voicing my needs and standing up for myself. Despite these compounding emotional and environmental burdens, I strive to stay resilient, drawing strength from my talents, close friendships, and my natural ability to make the best of bad situations.
-        
-        
-        
+                        As an extroverted and creative actor, I’m usually an open book, but moving back to Los Angeles against my will to care for my sick father has been incredibly stressful, especially living with him and my brother in a hoarding environment. Lately, this situation has manifested in distressing, out-of-control stress dreams nearly every day, alongside severe, near-daily appetite disruptions. More than half the time, I contend with persistent fatigue and low energy, which weighs heavily on me. On several days, I find myself feeling down and mildly hopeless about my father's illness, struggling with intermittent concentration difficulties and a slight loss of interest in my regular activities. I also experience occasional self-worth issues, particularly with voicing my needs and standing up for myself. Despite these compounding emotional and environmental burdens, I strive to stay resilient, drawing strength from my talents, close friendships, and my natural ability to make the best of bad situations.
         
         
         """),
@@ -503,16 +551,31 @@ The assessment focused on a few strong signals in your words. **Moving back to L
 
 The response picks up a few key parts of what you shared. **“Persistent fatigue and low energy”** tells us you’re feeling drained most of the time, which matches the fatigue theme when people say they’re tired all the way through. **“Feeling down and mildly hopeless”** shows a steady low mood or sadness, a hallmark of the depressed‑mood theme. And **“occasionally self‑worth issues”** reflects moments when you question your value or feel unworthy, a sign of low self‑worth. Each of these phrases helps the tool identify the patterns that underline moderate depression.
         """),
+        'COUNTERFACTUAL_explanation': (
+            """\
+            The screening indicates a **moderate** level of depressive symptoms.  
+The result was shaped by a few specific phrases in your message:
+
+- **“extroverted”** – suggests a typical outgoing personality, but the contrast with the stressful situation signals a mismatch.  
+- **“Angeles”** – the mention of a big city adds context to the stressors you’re facing, which the model notes as a factor.  
+- **“standing”** – indicates trouble affirming yourself, a sign the system sees as self‑worth concern.
+
+If the message had said **“hopeful”** instead of “mildly hopeless” about your father’s illness, the prediction could shift toward a lower level because that wording signals a more positive outlook.
+        """),
+        'HYBRID_explanation': (
+            """\
+            The assessment labeled your text as **moderate** risk for depression.  
+The assistant focused on three phrases: **persistent fatigue**, **low self‑worth issues**, and feeling **down**.  These words match familiar expressions of depressive symptoms—continued exhaustion, a negative view of oneself, and ongoing sadness—so they pushed the result toward a moderate level.
+
+If the message had said “regular energy levels” instead of “persistent fatigue,” or “neutral mood” instead of “feeling down,” the picture would lean toward a lower risk.  While your living situation and caring duties add strain, the assistant looks mainly at symptom expressions; when fatigue and low self‑worth are present, they heavily influence the risk classification, leading to the moderate label.
+        """),
     },
     {
         'id': 'daic_woz_moderate_372',
         'severity': 'moderate',
         'text': (
             """\
-                                                                        I am currently feeling pretty down and finding everything bittersweet. Ever since losing custody of my son, I struggle nearly every day with overwhelming feelings of failure and self-worth issues, feeling completely invisible and unacknowledged as a mother. I cry constantly, including at family events and in weekly therapy sessions. My small home environment is incredibly crowded and stressful, leading to frequent arguments with my husband, who is disappointed that I’ve lost my usual optimistic, fun spark. More than half the time, racing thoughts disrupt my sleep, forcing me to rely on medication, and I contend with a shortened attention span that impairs my concentration and a general loss of interest in life. I also experience occasional fatigue and appetite changes. Having no close friends further contributes to my social isolation. However, I remain dedicated to self-improvement; I take antidepressants, seek employment, and attend local literary events to fuel my dream of writing.
-        
-        
-        
+                         I am currently feeling pretty down and finding everything bittersweet. Ever since losing custody of my son, I struggle nearly every day with overwhelming feelings of failure and self-worth issues, feeling completely invisible and unacknowledged as a mother. I cry constantly, including at family events and in weekly therapy sessions. My small home environment is incredibly crowded and stressful, leading to frequent arguments with my husband, who is disappointed that I’ve lost my usual optimistic, fun spark. More than half the time, racing thoughts disrupt my sleep, forcing me to rely on medication, and I contend with a shortened attention span that impairs my concentration and a general loss of interest in life. I also experience occasional fatigue and appetite changes. Having no close friends further contributes to my social isolation. However, I remain dedicated to self-improvement; I take antidepressants, seek employment, and attend local literary events to fuel my dream of writing.
         
         
         """),
@@ -549,11 +612,8 @@ If the message had said *“I have a spacious, quiet house”* instead of **crow
         'severity': 'moderate',
         'text': (
             """\
-                                                                        I am currently experiencing moderate depression, a condition I’ve managed with psychiatric medication for years, but I’m deeply struggling after the recent deaths of my mother and uncle. For more than half the days, I endure a pervasive loss of interest in activities I once loved, like reading or shopping, and frequently feel down and hopeless. My mind constantly runs on overtime, making me feel scatterbrained and causing severe concentration difficulties. This mental strain disrupts my sleep; I struggle to stay asleep, often getting only three to four hours a night. Consequently, I face persistent fatigue, low energy, and appetite issues, leading to emotional overeating. Although insurance barriers prevent me from seeing a therapist and I get irritated easily, I maintain confidence in my reliability and strong work ethic. I am actively trying to cope by keeping my mind busy, dieting, and walking along the beach.
-        
-        
-        
-        
+                        I am currently experiencing moderate depression, a condition I’ve managed with psychiatric medication for years, but I’m deeply struggling after the recent deaths of my mother and uncle. For more than half the days, I endure a pervasive loss of interest in activities I once loved, like reading or shopping, and frequently feel down and hopeless. My mind constantly runs on overtime, making me feel scatterbrained and causing severe concentration difficulties. This mental strain disrupts my sleep; I struggle to stay asleep, often getting only three to four hours a night. Consequently, I face persistent fatigue, low energy, and appetite issues, leading to emotional overeating. Although insurance barriers prevent me from seeing a therapist and I get irritated easily, I maintain confidence in my reliability and strong work ethic. I am actively trying to cope by keeping my mind busy, dieting, and walking along the beach.
+    
         
         """),
         'prediction_confidence': 0.7321501619659149,
@@ -579,17 +639,20 @@ Replacing **runs** with *drifts* would soften the sense of intense mental activi
 If the final line had said “strolling in a quiet park” instead of “walking along the beach,” the focus on a calmer setting could lessen the impression of restlessness and might shift the outlook a bit.  
 The key is the language you use about your thoughts and actions.
         """),
+        'HYBRID_explanation': (
+            """\
+            The model says you’re experiencing a **moderate** level of depression. It spotlights signs such as **fatigue**, showing you feel drained most days, and **scatterbrained**, hinting at the mental fog and focus loss that often come with depression. The mention of sleeping only three to four hours also adds weight, as sleep disruption is a key indicator of this severity.
+
+If the text said “I’m getting a full night's rest” instead of “I struggle to stay asleep,” the picture would feel less severe, possibly moving toward a lighter level of depression. The lack of a sleeplessness signal would make the assessment feel less intense, and the mention of concentration issues would also shift the tone.
+        """),
     },
     {
         'id': 'daic_woz_moderate_412',
         'severity': 'moderate',
         'text': (
             """\
-                                                                        I am noticing that my thoughts have been just not as positive lately, and I've been feeling pretty tired. My mind runs on overdrive, causing me to toss and turn all night while worrying about work, the economy, and what the future holds. Because of this, it often feels like a struggle just to get through the day. I find myself overeating quite a bit, which has changed my weight since I moved to Los Angeles from Texas for work. It is also hard to stay as focused as I used to be, and I feel a bit scatterbrained. Despite being naturally shy and keeping a low amount of contact with my remaining family, I actively try to cope by keeping my mind busy. I find genuine relaxation and a sense of relief by going to meetup groups, making new friends, and going out Latin dancing several times a week.
-        
-        
-        
-        
+                        I am noticing that my thoughts have been just not as positive lately, and I've been feeling pretty tired. My mind runs on overdrive, causing me to toss and turn all night while worrying about work, the economy, and what the future holds. Because of this, it often feels like a struggle just to get through the day. I find myself overeating quite a bit, which has changed my weight since I moved to Los Angeles from Texas for work. It is also hard to stay as focused as I used to be, and I feel a bit scatterbrained. Despite being naturally shy and keeping a low amount of contact with my remaining family, I actively try to cope by keeping my mind busy. I find genuine relaxation and a sense of relief by going to meetup groups, making new friends, and going out Latin dancing several times a week.
+       
         
         """),
         'prediction_confidence': 0.6905777661892979,
@@ -617,17 +680,20 @@ These patterns together suggest the kind of sadness and mental fog that the tool
             """\
             Your recent message leads to a **moderate** assessment. Terms such as **day**, **toss**, and **economy** help shape this outcome. “Day” highlights how everyday life feels weighed down, “toss” points to restless nights, and “economy” signals broader worries that can intensify negative thoughts. Other signals like **notice** and **overeating** also suggest emotional changes in appetite and awareness of mood, reinforcing the moderate hint. Each phrase signals stress or difficulty coping with routine tasks, which the system interprets as signs of depression‑like patterns. If the text had said **“peaceful sleep”** instead of **“toss and turn,”** the signal would be less about restlessness, potentially shifting the assessment toward a lighter level. These factors together form the basis of the model’s assessment.
         """),
+        'HYBRID_explanation': (
+            """\
+            Your response was evaluated as having **moderate** risk of depression. The words **day**, **toss**, and **economy** stood out to the model because they often show up in texts where people describe persistent low mood and worry. The presence of these words nudged the assessment toward a higher level. The system looks for patterns that match what clinicians use when they talk about mood and thoughts. Because those words appeared together, the model raised the signal.
+
+For instance, if the text had said **day** as **days**—or used a different word for tossing like “tossed”—the model would have seen a slight shift in how it weighed these clues, potentially moving the result toward a lower risk. This change shows how small wording variations can influence the overall picture.
+        """),
     },
     {
         'id': 'daic_woz_moderate_422',
         'severity': 'moderate',
         'text': (
             """\
-                                                                        Lately, I feel physically crappy and down a lot of the time, which feels reasonable given my difficult health problems. Nearly every day, I experience severe fatigue, feeling as though I haven't slept for two days. Even though I sleep a lot, I never feel truly rested, and any moments of alertness are short-lived. As a deep thinker, my mind is constantly active, and I struggle with the realistic limitations my health places on my dream of becoming a veterinarian. Socially, I am a private person on the cusp between shy and outgoing. I intentionally withhold my difficulties from friends so I don't become a killjoy or make them uncomfortable. Despite these stressors and my regret over not finding a long-term life partner now that I am forty, I remain highly motivated. I am proud that I have persevered on my own, returning to school to complete my education and earning straight A’s.
-        
-        
-        
-        
+                        Lately, I feel physically crappy and down a lot of the time, which feels reasonable given my difficult health problems. Nearly every day, I experience severe fatigue, feeling as though I haven't slept for two days. Even though I sleep a lot, I never feel truly rested, and any moments of alertness are short-lived. As a deep thinker, my mind is constantly active, and I struggle with the realistic limitations my health places on my dream of becoming a veterinarian. Socially, I am a private person on the cusp between shy and outgoing. I intentionally withhold my difficulties from friends so I don't become a killjoy or make them uncomfortable. Despite these stressors and my regret over not finding a long-term life partner now that I am forty, I remain highly motivated. I am proud that I have persevered on my own, returning to school to complete my education and earning straight A’s.
+    
         
         """),
         'prediction_confidence': 0.724152889443732,
@@ -637,6 +703,12 @@ These patterns together suggest the kind of sadness and mental fog that the tool
             Your screening shows a **moderate** level of concern about depression. The algorithm considered how you described your thoughts and activities. Certain words carried more weight.
 
 The mention of **partner** indicates you’re reflecting on important relationships, a factor the tool sees as sensitive. Your reference to **persevered** signals you’re coping with challenges, which the system flags as a sign of burden. In contrast, speaking about **school** as a positive achievement helps lower the overall signal. This combination of words informs the assessment, helping the tool paint a clearer picture of your mood.
+        """),
+        'RAG_explanation': (
+            """\
+            The screening suggests a moderate level of depression.  
+
+Your words like **Lately, I feel physically crappy and down a lot of the time** show you are feeling low and not enjoying what you used to enjoy, which signals that the usual pleasures no longer feel rewarding. The line **Nearly every day, I experience severe fatigue, feeling as though I haven't slept for two days** points to constant tiredness that makes everyday tasks hard. Finally, **regret over not finding a long‑term life partner now that I am forty** reflects a sense of falling short of what you think you should, a feeling of worthlessness.
         """),
         'COUNTERFACTUAL_explanation': (
             """\
@@ -658,11 +730,8 @@ If the message had said something like “I feel energized and well‑rested” 
         'severity': 'none',
         'text': (
             """\
-                                                                        Generally, I’m doing fine and feel okay. I'm a highly introverted physics and astronomy teacher who spends long periods reading, doing math, and conducting research without much social interaction. I don't really have a best friend, but I am very close with my family, helping my aging parents with groceries and tutoring my nephews weekly. Lately, I've been experiencing mild sleep issues and occasional fatigue, finding it moderately hard to get a good night's rest, which leaves me functioning but slightly less happy. My main stressor is applying back to graduate school; I feel a bit nervous and apprehensive about whether it will go well. Aside from this academic anxiety, my motivation remains strong, and my concentration and appetite are completely unaffected. To relax and maintain a good mood, I rely on disciplined workouts, playing video games with my brother, and making mathematical breakthroughs, feeling proud of my scientific accomplishments.
-        
-        
-        
-        
+                        Generally, I’m doing fine and feel okay. I'm a highly introverted physics and astronomy teacher who spends long periods reading, doing math, and conducting research without much social interaction. I don't really have a best friend, but I am very close with my family, helping my aging parents with groceries and tutoring my nephews weekly. Lately, I've been experiencing mild sleep issues and occasional fatigue, finding it moderately hard to get a good night's rest, which leaves me functioning but slightly less happy. My main stressor is applying back to graduate school; I feel a bit nervous and apprehensive about whether it will go well. Aside from this academic anxiety, my motivation remains strong, and my concentration and appetite are completely unaffected. To relax and maintain a good mood, I rely on disciplined workouts, playing video games with my brother, and making mathematical breakthroughs, feeling proud of my scientific accomplishments.
+    
         
         """),
         'prediction_confidence': 0.7410235790235945,
@@ -698,10 +767,7 @@ If you had written, for example, “I feel hopeless instead of I feel okay,” t
         'severity': 'none',
         'text': (
             """\
-                                                                        Overall, I am doing fine and describe myself as an even-keel, level person. I am an outgoing doer and a whirlwind who loves talking to people. I stay active by playing the guitar, flying private planes, and reflecting on my accomplishments, like being one of the first black professional motocross racers. My parents, who are strong positive influences, guided me to study politics, and I lived abroad with them. While my concentration, appetite, and motivation remain stable, I experience mild, occasional disruptions in my sleep and energy. When I don’t sleep well, I can feel a bit agitated. I don't feel down or hopeless, though I occasionally deal with everyday relationship frustrations with my girlfriend, whom I find cool but sometimes arrogant. When looking back at past arguments with an ex-girlfriend, I think I could have been more patient. Generally, I feel content, balanced, and proud of my life achievements.
-        
-        
-        
+                        Overall, I am doing fine and describe myself as an even-keel, level person. I am an outgoing doer and a whirlwind who loves talking to people. I stay active by playing the guitar, flying private planes, and reflecting on my accomplishments, like being one of the first black professional motocross racers. My parents, who are strong positive influences, guided me to study politics, and I lived abroad with them. While my concentration, appetite, and motivation remain stable, I experience mild, occasional disruptions in my sleep and energy. When I don’t sleep well, I can feel a bit agitated. I don't feel down or hopeless, though I occasionally deal with everyday relationship frustrations with my girlfriend, whom I find cool but sometimes arrogant. When looking back at past arguments with an ex-girlfriend, I think I could have been more patient. Generally, I feel content, balanced, and proud of my life achievements.
         
         
         """),
@@ -725,32 +791,56 @@ Two or three phrases that helped it decide were **“overall, I am doing fine”
 
 If the message had said “I often feel *down* and *hopeless* instead of “I don’t feel down or hopeless,” the assessment would probably have leaned toward a higher risk.
         """),
+        'HYBRID_explanation': (
+            """\
+            Your brief told us you’re **overall** doing fine and you describe yourself as a **doer** who celebrates **accomplishments**. Those words carry a little weight because they hint at high energy or pressure, which our tool associates with a small possibility of depression. Because the rest of your text shows stable mood, good sleep when it works, and positive relationships, the model decided the overall picture leans toward **not depressed**.  
+The model gives a small signal because the language suggests a high level of activity, but the rest of the information points toward a stable emotional state.  
+
+If the language had flipped—e.g., saying “I don’t feel like doing anything” instead of “I stay active” or “I’m not happy with my life” instead of “I am doing fine”—the result would tip in the other direction.
+        """),
     },
     {
         'id': 'daic_woz_no_depression_374',
         'severity': 'none',
         'text': (
             """\
-                                                                        I am currently doing pretty good overall, with minimal depressive symptoms, though I've recently experienced mild fatigue and uncharacteristic sleep issues, like taking longer to fall asleep or waking up from intense dreams. I am currently in a transitional phase, job hunting after being deceptively let go from my last producing role—a situation that still brings up unresolved anger. This job search sometimes makes me feel guilty for not being productive enough. While I have a history of depression and previously struggled with basic functioning, ongoing therapy helps me notice my behavioral patterns. I value my supportive family, and being wrapped in their warm embrace over Christmas brought me true happiness after an isolating period of living alone with my dog. My best friend views me as funny, smart, and a good listener. I'm focusing on being more confident and less passive as I look for a stable full-time position.
-        
-        
-        
-        
+                        I am currently doing pretty good overall, with minimal depressive symptoms, though I've recently experienced mild fatigue and uncharacteristic sleep issues, like taking longer to fall asleep or waking up from intense dreams. I am currently in a transitional phase, job hunting after being deceptively let go from my last producing role—a situation that still brings up unresolved anger. This job search sometimes makes me feel guilty for not being productive enough. While I have a history of depression and previously struggled with basic functioning, ongoing therapy helps me notice my behavioral patterns. I value my supportive family, and being wrapped in their warm embrace over Christmas brought me true happiness after an isolating period of living alone with my dog. My best friend views me as funny, smart, and a good listener. I'm focusing on being more confident and less passive as I look for a stable full-time position.
+   
         
         """),
         'prediction_confidence': 0.7870195091891138,
         'prediction_label': 'not depression',
+        'SHAP_explanation': (
+            """\
+            Your result indicates **NOT DEPRESSION**.
+
+The screening highlighted a few clues that helped the system decide.  
+**“Minimal depressive symptoms”** shows you’re not experiencing many of the core signs that usually flag depression.  
+**“Job hunting after being let go”** signals a life change that can create some stress, but since the symptoms you described are mild, it doesn’t tip the balance toward depression.  
+Lastly, **“supportive family”** is a strong protective factor, suggesting you have a good support network around you.
+
+Together, these hints point to a low overall risk for depression.
+        """),
         'RAG_explanation': (
             """\
             Your screening result shows no depression. The tool checks how often certain thoughts or feelings appear and their impact. Phrases like **uncharacteristic sleep issues**, **unresolved anger**, and feeling **guilty for not being productive** hint at the mood concerns it watches for. The AI also noticed recent happiness and clear goals.
 
 Because those feelings were mild and you had strong positives, the overall score stayed below the depression threshold. The matching themes show what was examined, but the total picture was not enough to trigger a depression classification. The assessment did not see a pattern strong enough to mark it as depression.
         """),
+        'COUNTERFACTUAL_explanation': (
+            """\
+            **Your screening result is “NOT DEPRESSION.”**
+
+The system looked mainly at the way you described yourself. Phrases like **“overall, doing pretty good,”** **“minimal depressive symptoms,”** and **“confident”** give a picture of overall functioning and optimism. They hint that, even with some fatigue or anger, you’re still feeling capable and supported, and that lowers the flag for depression. The mention of **“history”** is noted but, in this context, the more recent positive wording outweighs past struggles.
+
+If the message had said, for example, **“I have been feeling very sad and helpless lately”** instead of **“overall, doing pretty good,”** the impression would shift to one of ongoing sadness, which could move the result toward a higher depression level.
+        """),
         'HYBRID_explanation': (
             """\
-            We found no signs of depression in your message.  A few words that helped us decide were **history**, **symptoms**, and **confident**.  Saying you have a past of depression gives the model a point of concern.  Mentioning **symptoms** signals that you’re noting feelings that could be darker, and talking about being **confident** shows some positive energy that balances those risks.  
+            The assessment says you are **NOT DEPRESSION**.  
+The main wording that guided this was **“history of depression,”** **“doing pretty good overall,”** and **“symptoms.”** Those phrases let the model see that you have a past episode, are currently coping well, and the symptoms you mention are mild without ongoing daily impact. The overall mood seems stable, and the positive details about family and therapy suggest protective factors.
 
-If the message had said something like “I feel completely happy and energetic” instead of “I am currently doing pretty good overall,” the signals would lean even more toward a positive tone and the result would stay firmly **NOT DEPRESSION**.
+If the message had said, for example, *“I have been feeling very sad for weeks, unable to leave the house, and I think I am worthless,”* the language would have leaned more toward a depressive state.
         """),
     },
     {
@@ -758,10 +848,7 @@ If the message had said something like “I feel completely happy and energetic�
         'severity': 'none',
         'text': (
             """\
-                                                                        I am a twenty-three-year-old journalism student who feels pretty good and enjoys life, as things are looking up with my graduation approaching and a recent internship that makes me feel accomplished. However, I have felt a little tired lately and my sleep has been disrupted for a few days by roofing workers waking me up early, making me a bit crabby. Emotionally, I have never felt depressed, but I am dealing with a heavy stressor: my childhood best friend was recently diagnosed with paranoid schizophrenia after his military service. It is incredibly hard to witness, and I feel somewhat guilty and conflicted about how to interact with him now. While I can sometimes be shy around strangers or get lackadaisical and procrastinate, I am ultimately a determined, hardworking, and honest person who values deep relationships. I feel proud of my academic progress and can't complain about my life right now.
-        
-        
-        
+                        I am a twenty-three-year-old journalism student who feels pretty good and enjoys life, as things are looking up with my graduation approaching and a recent internship that makes me feel accomplished. However, I have felt a little tired lately and my sleep has been disrupted for a few days by roofing workers waking me up early, making me a bit crabby. Emotionally, I have never felt depressed, but I am dealing with a heavy stressor: my childhood best friend was recently diagnosed with paranoid schizophrenia after his military service. It is incredibly hard to witness, and I feel somewhat guilty and conflicted about how to interact with him now. While I can sometimes be shy around strangers or get lackadaisical and procrastinate, I am ultimately a determined, hardworking, and honest person who values deep relationships. I feel proud of my academic progress and can't complain about my life right now.
         
         
         """),
@@ -786,21 +873,33 @@ These cues match parts of what the tool looks for, like sleep disturbance and sl
 
 If the message said **“I feel sad and hopeless.”** instead of **“I feel pretty good,”** the model would likely rate the mood higher, potentially shifting the assessment to a moderate or higher level.
         """),
+        'HYBRID_explanation': (
+            """\
+            The assessment says you are **NOT DEPRESSION**.  
+The system looked mainly at a few phrases that often appear in people who are struggling. For example, **“complain”** and **“dealing”** signal a mindset that can increase worry. The word **“lackadaisical”** points to a tendency to be careless or slow, which can also be a clue. Because the rest of the text—talk of excitement for graduation, pride in work, and not feeling depressed—counterbalanced these, the result stayed below a depression threshold.
+
+If the message had said, “I’ve been feeling **very sad all the time** instead of “I have never felt depressed,” the assessment would have leaned more toward depression, because such a phrase directly matches the core symptom of persistent sadness.
+        """),
     },
     {
         'id': 'daic_woz_no_depression_393',
         'severity': 'none',
         'text': (
             """\
-                                                                        I am a hardworking, intelligent person who generally feels fine and considers himself someone who perseveres and never quits. Professionally, I studied business economics and am currently working toward my dream of becoming a company CEO. While I am mostly outgoing and enjoy working out or gathering with friends, I can become shy and reserved in large groups. I am very close to my family, though I wish my brother and I had handled past conflicts without fighting, and I value a supportive mentor from my church. Lately, I have been dealing with prominent fatigue and low energy, though falling asleep remains easy. Reflecting on my past, I feel I did not fully live up to my potential in high school and recall being bullied as a child. Currently, my main personal challenge is losing some weight I recently gained, but I remain motivated to pursue my goals without hesitation.
-        
-        
-        
-        
+                        I am a hardworking, intelligent person who generally feels fine and considers himself someone who perseveres and never quits. Professionally, I studied business economics and am currently working toward my dream of becoming a company CEO. While I am mostly outgoing and enjoy working out or gathering with friends, I can become shy and reserved in large groups. I am very close to my family, though I wish my brother and I had handled past conflicts without fighting, and I value a supportive mentor from my church. Lately, I have been dealing with prominent fatigue and low energy, though falling asleep remains easy. Reflecting on my past, I feel I did not fully live up to my potential in high school and recall being bullied as a child. Currently, my main personal challenge is losing some weight I recently gained, but I remain motivated to pursue my goals without hesitation.
+      
         
         """),
         'prediction_confidence': 0.7781136127940024,
         'prediction_label': 'not depression',
+        'SHAP_explanation': (
+            """\
+            Your results indicate that a diagnosis of depression is unlikely.  
+The assessment highlighted a few elements from your message that helped reach this conclusion.  
+**Hardworking** and **pursue** suggest a strong sense of drive and determination—qualities that counteract depressive patterns.  
+On the other hand, the word **low energy** points to fatigue, which can appear in many everyday life situations: it doesn’t necessarily mean the mood or motivation is affected enough to meet depression criteria.  
+Your note about **gained** weight shows a practical goal you’re focusing on, but it is not a marker of emotional distress. Together, these clues create a profile that leans toward normal emotional functioning rather than depression.
+        """),
         'RAG_explanation': (
             """\
             You’re not showing enough signs for a depression diagnosis.  
@@ -824,11 +923,8 @@ If the message said “I feel like I can’t get out of bed” instead of “I h
         'severity': 'none',
         'text': (
             """\
-                                                                        I am doing very good and feeling enthusiastic about the future, though I am currently facing employment and financial challenges. I studied alcohol and drug counseling to fulfill my life mission of helping people overcome addiction. However, a past felony and lack of certification complicate my job search. I am incredibly proud of my mother, but my broader family structure is fractured; my brother has been imprisoned for twenty years, my sister moved away long ago, and I am still searching for my son. I struggle with my sleep, usually staying up until three in the morning, and notice slight appetite issues. I actively manage my thoughts and behavior to remain calm and mellow, drawing coping skills from an influential mentor who helped me control a historically volatile temper. I still experience intrusive cognitive patterns, frequently replaying a traumatic memory of my brother hitting my mother and feeling self-conscious about my teeth.
-        
-        
-        
-        
+                        I am doing very good and feeling enthusiastic about the future, though I am currently facing employment and financial challenges. I studied alcohol and drug counseling to fulfill my life mission of helping people overcome addiction. However, a past felony and lack of certification complicate my job search. I am incredibly proud of my mother, but my broader family structure is fractured; my brother has been imprisoned for twenty years, my sister moved away long ago, and I am still searching for my son. I struggle with my sleep, usually staying up until three in the morning, and notice slight appetite issues. I actively manage my thoughts and behavior to remain calm and mellow, drawing coping skills from an influential mentor who helped me control a historically volatile temper. I still experience intrusive cognitive patterns, frequently replaying a traumatic memory of my brother hitting my mother and feeling self-conscious about my teeth.
+       
         
         """),
         'prediction_confidence': 0.7388290388862189,

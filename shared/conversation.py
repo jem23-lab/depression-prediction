@@ -49,7 +49,7 @@ def process_message(user_id: int, text: str) -> dict:
     welcome = (
         "👋Welcome to our study.\n\n"
         "Our goal is to improve AI tools by making them more transparent for end users.\n"
-        "In this study, we focus on predicting depressive states from text using AI.\n\n"
+        "In this study, we focus on predicting depressive states from text using explainable AI.\n\n"
         "You will go through 10 texts in total (~30 minutes).\n\n"
         "In each case:\n"
         "1️⃣ 📄You will be shown a text sample from an individual.\n"
