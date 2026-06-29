@@ -1,0 +1,27 @@
+================================================================================
+LATIN SQUARE DESIGN ANALYSIS REPORT
+================================================================================
+
+OVERVIEW:
+--------------------------------------------------------------------------------
+Users: 14
+Paragraphs: 20
+Use cases: 4
+Use cases: COUNTERFACTUAL, HYBRID, RAG, SHAP
+
+USE CASE PAIR FREQUENCIES:
+--------------------------------------------------------------------------------
+RAG ← → SHAP: 23
+COUNTERFACTUAL ← → HYBRID: 22
+COUNTERFACTUAL ← → SHAP: 19
+COUNTERFACTUAL ← → RAG: 18
+HYBRID ← → SHAP: 17
+HYBRID ← → RAG: 17
+
+Min frequency: 17
+Max frequency: 23
+Range: 6
+
+⚠️ STATUS: UNBALANCED DESIGN
+Imbalance range: 6
+Imbalance percentage: 35.3%

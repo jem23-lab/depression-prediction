@@ -22,7 +22,7 @@ logger = logging.getLogger("mcp_modular_agent")
 SYSTEM_ROUTER = (
     "You are an MCP router for depression explanation services. "
     "Choose the best explanation server(s) for the given user text and prediction context. "
-    "Available servers: shap, rag, counterfactual. "
+    "Available servers: shap, rag, counterfactual, hybrid_shap_rag_counterfactual. "
     "Return JSON only."
 )
 
@@ -69,7 +69,7 @@ Return strict JSON with keys:
         raw = call_gemini(prompt, system=SYSTEM_ROUTER)
         parsed = _safe_json_parse(raw)
         ranked = [str(x).strip().lower() for x in parsed.get("ranked_servers", [])]
-        ranked = [x for x in ranked if x in {"shap", "rag", "counterfactual"}]
+        ranked = [x for x in ranked if x in {"shap", "rag", "counterfactual", "hybrid_shap_rag_counterfactual"}]
         if not ranked:
             ranked = ["shap", "rag", "counterfactual"]
         rationale = str(parsed.get("rationale", ""))
@@ -102,6 +102,14 @@ def _run_counterfactual(user_text: str) -> str:
     return generate_cf_explanation(user_text, cf_result)
 
 
+def _run_hybrid(user_text: str) -> str:
+    from architecture.hybrid_shap_rag_counterfactual.hybrid_pipeline import run_hybrid_pipeline
+    from architecture.hybrid_shap_rag_counterfactual.hybrid_explainer import generate_hybrid_explanation
+
+    hybrid_result = run_hybrid_pipeline(user_text)
+    return generate_hybrid_explanation(user_text, hybrid_result)
+
+
 def run_mcp_pipeline(user_text: str, fallback: bool = True, top_k: int = 2) -> Dict[str, Any]:
     probs = predict_proba([user_text])[0]
     pred_label, severity_score, _ = classify_severity(probs)
@@ -115,6 +123,7 @@ def run_mcp_pipeline(user_text: str, fallback: bool = True, top_k: int = 2) -> D
         "shap": _run_shap,
         "rag": _run_rag,
         "counterfactual": _run_counterfactual,
+        "hybrid_shap_rag_counterfactual": _run_hybrid,
     }
 
     selected = ranked[0] if ranked else "shap"

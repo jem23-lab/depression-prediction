@@ -473,6 +473,13 @@ def _run_explanation_method(
         save_explanation(paragraph_id, method, explanation)
         return model_result, explanation
 
+    if method == "MCP":
+        run_mcp_pipeline = _get_mcp_pipeline()
+        result = run_mcp_pipeline(user_text)
+        explanation = result.get("explanation", "No explanation returned.")
+        save_explanation(paragraph_id, method, explanation)
+        return result, explanation
+
     generate_counterfactuals, _, generate_explanation, _ = _get_cf_pipeline()
     model_result = generate_counterfactuals(user_text, n_candidates=3, n_attempts=2)
     if hasattr(model_result, "pred_label"):

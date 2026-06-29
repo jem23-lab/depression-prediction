@@ -1,0 +1,25 @@
+KRUSKAL-WALLIS TEST ACROSS METHODS
+========================================
+Clarity         : H=4.178, p=0.2429
+Correctness     : H=5.391, p=0.1453
+Helpfulness     : H=0.341, p=0.9521
+Trust           : H=0.978, p=0.8066
+Overall_avg     : H=2.238, p=0.5245
+
+AVERAGE METRICS BY TOOL
+========================================
+                        Clarity  Correctness  Helpfulness  Trust
+selected_use_case_name                                          
+RAG                       4.086        3.862        3.621  3.638
+HYBRID                    3.839        3.875        3.714  3.625
+SHAP                      3.763        3.610        3.644  3.576
+COUNTERFACTUAL            3.729        3.542        3.644  3.492
+
+BEST TOOL BY SEVERITY & CONFIDENCE (Overall Avg)
+========================================
+        Severity/Condition      Best Tool  Overall Avg
+                    Severe COUNTERFACTUAL        3.978
+                  Moderate            RAG        3.802
+            Not depression            RAG        4.033
+ Lower confidence (< 0.75)            RAG        3.881
+Higher confidence (> 0.75)         HYBRID        3.700
