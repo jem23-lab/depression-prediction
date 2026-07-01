@@ -196,6 +196,7 @@ PAIRWISE_CRITERIA = [
     ("clarity", "Which response explained the prediction more clearly and was easier to understand?"),
     ("accuracy", "Which response appeared more accurate and consistent with the prediction?"),
     ("helpfulness", "Which explanation better answered your question?"),
+    ("trust", "Which explanation would you prefer to receive from a healthcare assistant?"),
 ]
 
 PREFERENCE_OPTIONS = [
@@ -336,6 +337,8 @@ def _append_interactive_evaluation(row: dict):
         "rating_accuracy_winner",
         "rating_helpfulness",
         "rating_helpfulness_winner",
+        "rating_trust",
+        "rating_trust_winner",
     ]
 
     write_header = not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0
@@ -446,6 +449,8 @@ async def _finish_pairwise_evaluation(update: Update, context: ContextTypes.DEFA
         "rating_accuracy_winner": _preference_winner(ratings.get("accuracy", ""), label_a, label_b),
         "rating_helpfulness": ratings.get("helpfulness", ""),
         "rating_helpfulness_winner": _preference_winner(ratings.get("helpfulness", ""), label_a, label_b),
+        "rating_trust": ratings.get("trust", ""),
+        "rating_trust_winner": _preference_winner(ratings.get("trust", ""), label_a, label_b),
     })
 
     context.user_data.pop("pairwise_flow", None)
@@ -568,7 +573,7 @@ async def _handle_participant_question(update: Update, context: ContextTypes.DEF
         "planner_tools": planner_result.get("selected_tools", []),
         "planner_intent": planner_result.get("intent", ""),
         "planner_rationale": planner_result.get("rationale", ""),
-        "ratings": {"clarity": None, "accuracy": None, "helpfulness": None},
+        "ratings": {"clarity": None, "accuracy": None, "helpfulness": None, "trust": None},
         "step": 0,
     }
     await _send_pairwise_prompt(update, context)
