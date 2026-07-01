@@ -849,7 +849,9 @@ def _run_explanation_method(
         return result, explanation
 
     generate_counterfactuals, _, generate_explanation, _ = _get_cf_pipeline()
-    model_result = generate_counterfactuals(user_text, n_candidates=3, n_attempts=2)
+    cf_candidates = 2 if user_question else 3
+    cf_attempts = 1 if user_question else 2
+    model_result = generate_counterfactuals(user_text, n_candidates=cf_candidates, n_attempts=cf_attempts)
     if hasattr(model_result, "pred_label"):
         _override_prediction(model_result, forced_label, forced_conf)
     explanation = generate_explanation(prompt_text, model_result)

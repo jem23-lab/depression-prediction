@@ -31,7 +31,7 @@ import os
 import re
 import logging
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import numpy as np
 
@@ -44,6 +44,9 @@ from shared.depression_model import (
 from shared.llm_client import call_gemini
 
 logger = logging.getLogger("cf_generator")
+
+_SEMANTIC_EMBEDDER = None
+_SEMANTIC_MODE = os.environ.get("CF_SEMANTIC_MODE", "lexical").strip().lower()
 
 # ── Target label strategy ─────────────────────────────────────────────
 CF_TARGET_MAP = {
@@ -106,18 +109,40 @@ def _minimality_score(original: str, cf: str) -> float:
     return round(1.0 - (dist / max_len), 3)
 
 
-def _semantic_similarity(original: str, cf: str) -> float:
-    try:
+def _lexical_similarity(original: str, cf: str) -> float:
+    s1 = set(original.lower().split())
+    s2 = set(cf.lower().split())
+    return round(len(s1 & s2) / max(len(s1 | s2), 1), 3)
+
+
+def _get_semantic_embedder():
+    global _SEMANTIC_EMBEDDER
+    if _SEMANTIC_EMBEDDER is None:
         from sentence_transformers import SentenceTransformer
-        m    = SentenceTransformer("all-MiniLM-L6-v2")
-        embs = m.encode([original, cf])
-        cos  = float(np.dot(embs[0], embs[1]) /
-                     (np.linalg.norm(embs[0]) * np.linalg.norm(embs[1]) + 1e-9))
-        return round(cos, 3)
-    except Exception:
-        s1 = set(original.lower().split())
-        s2 = set(cf.lower().split())
-        return round(len(s1 & s2) / max(len(s1 | s2), 1), 3)
+        _SEMANTIC_EMBEDDER = SentenceTransformer("all-MiniLM-L6-v2")
+    return _SEMANTIC_EMBEDDER
+
+
+def _semantic_similarity_many(original: str, candidates: Sequence[str]) -> List[float]:
+    if not candidates:
+        return []
+
+    if _SEMANTIC_MODE not in {"transformer", "sentence_transformer"}:
+        return [_lexical_similarity(original, cf) for cf in candidates]
+
+    try:
+        model = _get_semantic_embedder()
+        embs = model.encode([original, *candidates], convert_to_numpy=True)
+        original_emb = embs[0]
+        scores = []
+        for cf_emb in embs[1:]:
+            cos = float(np.dot(original_emb, cf_emb) /
+                        (np.linalg.norm(original_emb) * np.linalg.norm(cf_emb) + 1e-9))
+            scores.append(round(cos, 3))
+        return scores
+    except Exception as exc:
+        logger.warning("Transformer semantic similarity failed; using lexical fallback: %s", exc)
+        return [_lexical_similarity(original, cf) for cf in candidates]
 
 
 def _evaluate_candidate(
@@ -128,7 +153,7 @@ def _evaluate_candidate(
     cf_label, _, _ = classify_severity(cf_probs)
     flip_success = cf_label != original_label
     minimality   = _minimality_score(original, candidate_text)
-    semantic_sim = _semantic_similarity(original, candidate_text)
+    semantic_sim = _semantic_similarity_many(original, [candidate_text])[0]
 
     if flip_success:
         score = 1.0 + 0.5 * minimality + 0.5 * semantic_sim
@@ -153,6 +178,48 @@ def _evaluate_candidate(
     }
 
 
+def _evaluate_candidates(
+    original: str,
+    original_label: str,
+    candidate_texts: Sequence[str],
+    target_label: str,
+) -> List[dict]:
+    """Batch-score CF candidates to avoid repeated model/vectorizer calls."""
+    if not candidate_texts:
+        return []
+
+    cf_probs_batch = predict_proba(list(candidate_texts))
+    semantic_scores = _semantic_similarity_many(original, candidate_texts)
+    evaluated = []
+
+    for candidate_text, cf_probs, semantic_sim in zip(candidate_texts, cf_probs_batch, semantic_scores):
+        cf_label, _, _ = classify_severity(cf_probs)
+        flip_success = cf_label != original_label
+        minimality = _minimality_score(original, candidate_text)
+
+        if flip_success:
+            score = 1.0 + 0.5 * minimality + 0.5 * semantic_sim
+        else:
+            label_order = {"severe": 0, "moderate": 1, "not depression": 2}
+            orig_pos = label_order.get(original_label, 0)
+            cf_pos = label_order.get(cf_label, 0)
+            target_pos = label_order.get(target_label, 0)
+            movement = (cf_pos - orig_pos) * (1 if target_pos > orig_pos else -1)
+            score = max(0.0, 0.3 * movement / 2 + 0.2 * minimality)
+
+        evaluated.append({
+            "text":         candidate_text,
+            "label":        cf_label,
+            "probs":        cf_probs,
+            "flip_success": flip_success,
+            "minimality":   minimality,
+            "semantic_sim": semantic_sim,
+            "score":        round(score, 4),
+        })
+
+    return evaluated
+
+
 # ── SHAP-guided CF prompt (FitCF / FIZLE approach) ───────────────────
 def _build_cf_prompt(
     original_text:  str,
@@ -167,6 +234,7 @@ def _build_cf_prompt(
         hint = SYMPTOM_RECOVERY_HINTS.get(word, f"Soften or replace '{t['token']}'")
         token_hints.append(f"  - '{t['token']}' (SHAP={t['shap']:+.4f}): {hint}")
     token_block = "\n".join(token_hints) or "  (Make holistic edits)"
+    output_lines = "\n".join(["CF: <counterfactual text>" for _ in range(n_candidates)])
 
     return f"""You are a Counterfactual Explanation Generator for a depression screening AI.
 
@@ -187,9 +255,7 @@ CONSTRAINTS — each counterfactual MUST:
 5. NOT be a complete rewrite — only targeted changes
 
 OUTPUT FORMAT — exactly {n_candidates} lines, each starting with "CF:":
-CF: <counterfactual text>
-CF: <counterfactual text>
-CF: <counterfactual text>
+{output_lines}
 
 No explanation, preamble, or extra text. Only the CF: lines."""
 
@@ -237,20 +303,25 @@ def generate_counterfactuals(
     result.shap_guided_tokens  = shap_result.risk_tokens[:5]
     logger.info("SHAP risk tokens: %s", [t["token"] for t in result.shap_guided_tokens])
 
-    # Step 3: LLM generation (multiple attempts for higher flip rate)
+    # Step 3: LLM generation. Request the total candidate budget in one call
+    # to avoid repeated LLM round trips; retry only if parsing returns nothing.
     all_candidates = []
-    for attempt in range(n_attempts):
+    requested_candidates = max(1, n_candidates * max(n_attempts, 1))
+    max_attempts = 2 if n_attempts > 1 else 1
+    for attempt in range(max_attempts):
         prompt = _build_cf_prompt(
             original_text  = user_text,
             original_label = original_label,
             target_label   = target_label,
             shap_tokens    = result.shap_guided_tokens,
-            n_candidates   = n_candidates,
+            n_candidates   = requested_candidates,
         )
         try:
             parsed = _parse_candidates(call_gemini(prompt))
             logger.info("Attempt %d: %d candidates", attempt + 1, len(parsed))
             all_candidates.extend(parsed)
+            if parsed:
+                break
         except Exception as e:
             logger.warning("Attempt %d failed: %s", attempt + 1, e)
 
@@ -261,11 +332,8 @@ def generate_counterfactuals(
             seen.add(c)
             unique.append(c)
 
-    # Step 4: evaluate
-    evaluated = [
-        _evaluate_candidate(user_text, original_label, cf, target_label)
-        for cf in unique
-    ]
+    # Step 4: evaluate in batch
+    evaluated = _evaluate_candidates(user_text, original_label, unique, target_label)
     evaluated.sort(key=lambda x: (x["flip_success"], x["score"]), reverse=True)
 
     result.candidates = evaluated

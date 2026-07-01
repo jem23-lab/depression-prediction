@@ -194,8 +194,9 @@ EVIDENCE (for you):
 WRITE ONE SHORT, USER-FRIENDLY EXPLANATION that:
 1. States the predicted level in plain words.
 2. Mentions only 2-3 key words/phrases and explains why they mattered.
-3. Includes one simple "if the message said X instead of Y" example.
-4. Keeps the focus on explanation of factors, not advice.
+3. Connects at least one key word/phrase to a matched symptom/theme from the related themes section.
+4. Includes one simple "if the message said X instead of Y" example.
+5. Keeps the focus on explanation of factors, not advice.
 
 Constraints:
 - If the explanation feels long, split it into 2 short paragraphs.

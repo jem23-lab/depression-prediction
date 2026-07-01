@@ -191,7 +191,7 @@ def _format_rag_evidence(user_text: str) -> str:
 def _format_counterfactual_evidence(user_text: str) -> str:
     from architecture.shap_counterfactual_explainer.cf_generator import generate_counterfactuals
 
-    result = generate_counterfactuals(user_text, n_candidates=3, n_attempts=2)
+    result = generate_counterfactuals(user_text, n_candidates=2, n_attempts=1)
     lines = ["Counterfactual evidence: wording changes that could shift the prediction."]
 
     if result.shap_guided_tokens:
