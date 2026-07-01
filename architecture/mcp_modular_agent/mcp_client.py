@@ -75,16 +75,24 @@ def _normalize_tools(raw_tools: Any) -> List[str]:
     return tools or ["shap"]
 
 
-def _plan_strategy(user_text: str, pred_label: str, severity_score: float) -> Dict[str, Any]:
+def _plan_strategy(
+    user_text: str,
+    pred_label: str,
+    severity_score: float,
+    user_question: str = "",
+) -> Dict[str, Any]:
     prompt = f"""
 User text:
 "{user_text}"
+
+Participant question:
+"{user_question or 'Explain the prediction.'}"
 
 Prediction context:
 - predicted_label: {pred_label}
 - severity_score: {severity_score:.3f}
 
-Decide the user's explanation intent and select tools.
+Decide the participant's explanation intent and select tools.
 
 Intent options:
 - prediction_reason: explain which words or phrases drove the prediction
@@ -249,6 +257,7 @@ def _collect_evidence(user_text: str, planned_tools: List[str], fallback: bool) 
 
 def _generate_response(
     user_text: str,
+    user_question: str,
     pred_label: str,
     confidence: float,
     plan: Dict[str, Any],
@@ -265,6 +274,9 @@ Keep the focus on explaining the AI prediction.
 
 User text:
 "{user_text}"
+
+Participant question:
+"{user_question or 'Explain the prediction.'}"
 
 Prediction:
 - label: {pred_label}
@@ -290,7 +302,7 @@ Use the evidence according to the planner's intent:
 Rules:
 - Use only the evidence above; do not add outside facts, advice, diagnosis, or reassurance.
 - Do not mention SHAP, RAG, counterfactual, planner, tools, scores, or confidence.
-- Keep it understandable for a non-technical user.
+- Directly answer the participant's question and keep it understandable for a non-technical user.
 - Prefer one or two short paragraphs, not bullet points.
 - Be concise, but do not omit evidence that changes the meaning of the explanation.
 """.strip()
@@ -298,7 +310,12 @@ Rules:
     return call_gemini(prompt, system=SYSTEM_RESPONSE_GENERATOR)
 
 
-def run_mcp_pipeline(user_text: str, fallback: bool = True, top_k: int = 2) -> Dict[str, Any]:
+def run_mcp_pipeline(
+    user_text: str,
+    fallback: bool = True,
+    top_k: int = 2,
+    user_question: str = "",
+) -> Dict[str, Any]:
     """
     Agentic use case:
     planner JSON -> selected Python evidence tools -> final LLM synthesis.
@@ -311,13 +328,13 @@ def run_mcp_pipeline(user_text: str, fallback: bool = True, top_k: int = 2) -> D
     pred_label, severity_score, _ = classify_severity(probs)
     confidence = float(max(probs))
 
-    plan = _plan_strategy(user_text, pred_label, severity_score)
+    plan = _plan_strategy(user_text, pred_label, severity_score, user_question=user_question)
     evidence_blocks, errors = _collect_evidence(user_text, plan["tools"], fallback=fallback)
 
     if not evidence_blocks:
         raise RuntimeError(f"All selected MCP evidence tools failed. Errors: {' | '.join(errors)}")
 
-    explanation = _generate_response(user_text, pred_label, confidence, plan, evidence_blocks)
+    explanation = _generate_response(user_text, user_question, pred_label, confidence, plan, evidence_blocks)
     executed_tools = _execution_tools(plan["tools"])
 
     return {

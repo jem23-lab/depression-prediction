@@ -50,12 +50,13 @@ def process_message(user_id: int, text: str) -> dict:
         "👋Welcome to our study.\n\n"
         "Our goal is to improve AI tools by making them more transparent for end users.\n"
         "In this study, we focus on predicting depressive states from text using explainable AI.\n\n"
-        "You will go through 10 texts in total (~30 minutes).\n\n"
+        "You will go through 5 texts in total.\n\n"
         "In each case:\n"
         "1️⃣ 📄You will be shown a text sample from an individual.\n"
         "2️⃣ 🤖The AI will provide a prediction of that person's depressive state.\n"
-        "3️⃣ 💡You will be presented with two explanation for that prediction.\n"
-        "4️⃣ ⭐️You will rate the explanation.\n\n"
+        "3️⃣ 💬You can ask questions about the prediction.\n"
+        "4️⃣ 💡You will compare two anonymous responses.\n"
+        "5️⃣ ⭐️You will rate which response better answered your question.\n\n"
         "Type /begin to begin."
     )
 

@@ -20,6 +20,7 @@ import os
 import sys
 import logging
 import random
+import csv
 from datetime import datetime, timezone
 import re
 import asyncio
@@ -191,10 +192,28 @@ EVAL_CRITERIA = [
     ("trust", "Trust (does the explanation make you more confident in the AI system's output?)"),
 ]
 
+PAIRWISE_CRITERIA = [
+    ("clarity", "Which response explained the prediction more clearly and was easier to understand?"),
+    ("accuracy", "Which response appeared more accurate and consistent with the prediction?"),
+    ("helpfulness", "Which explanation better answered your question?"),
+]
+
+PREFERENCE_OPTIONS = [
+    ("strong_a", "Strongly prefer A"),
+    ("prefer_a", "Prefer A"),
+    ("no_pref", "No preference"),
+    ("prefer_b", "Prefer B"),
+    ("strong_b", "Strongly prefer B"),
+]
+
+BASELINE_METHODS = ["SHAP", "RAG", "HYBRID", "COUNTERFACTUAL"]
+
 
 # ── Central message handler ──────────────────────────────────────────
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
+        if await _handle_pairwise_callback(update, context):
+            return
         if await _handle_rating(update, context):
             return
         return
@@ -206,6 +225,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     logger.info("User %s: %s", user_id, text[:80])
 
+    if text.lower() in ("/start", "/help", "/begin"):
+        context.user_data.clear()
+        result = process_message(user_id, text)
+        await safe_send(update, result["response"])
+        if result["status"] == "ready":
+            await _begin_session(update, context)
+        return
+
+    if context.user_data.get("awaiting_question"):
+        await _handle_participant_question(update, context, text)
+        return
+
+    if context.user_data.get("pairwise_flow"):
+        await update.message.reply_text("Please use the response buttons above before continuing.")
+        return
+
     if await _handle_rating(update, context):
         return
 
@@ -214,6 +249,329 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if result["status"] == "ready":
         await _begin_session(update, context)
+
+
+def _comparison_keyboard(step: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(label, callback_data=f"cmp:{step}:{value}")]
+        for value, label in PREFERENCE_OPTIONS
+    ])
+
+
+def _ask_another_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Yes", callback_data="again:yes"),
+            InlineKeyboardButton("No", callback_data="again:no"),
+        ]
+    ])
+
+
+def _planner_tools_to_methods(planner_result: dict) -> set:
+    tools = planner_result.get("selected_tools") or []
+    if not tools:
+        selected_server = str(planner_result.get("selected_server", ""))
+        tools = [part for part in selected_server.split("+") if part]
+
+    mapping = {
+        "shap": "SHAP",
+        "rag": "RAG",
+        "counterfactual": "COUNTERFACTUAL",
+        "hybrid": "HYBRID",
+        "hybrid_shap_rag_counterfactual": "HYBRID",
+    }
+    return {mapping.get(str(tool).lower()) for tool in tools if mapping.get(str(tool).lower())}
+
+
+def _pick_baseline_method(planner_result: dict) -> str:
+    planner_methods = _planner_tools_to_methods(planner_result)
+    candidates = [method for method in BASELINE_METHODS if method not in planner_methods]
+    if not candidates:
+        candidates = BASELINE_METHODS[:]
+    return random.choice(candidates)
+
+
+def _question_context(paragraph_text: str, question: str) -> str:
+    return (
+        f"Text sample:\n\"{paragraph_text}\"\n\n"
+        f"Participant question:\n\"{question}\""
+    )
+
+
+def _preference_winner(choice: str, label_a: str, label_b: str) -> str:
+    if choice.endswith("_a"):
+        return label_a
+    if choice.endswith("_b"):
+        return label_b
+    return "no_preference"
+
+
+def _append_interactive_evaluation(row: dict):
+    csv_path = os.path.join(_ROOT, "logs", "interactive_evaluation_records.csv")
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    fieldnames = [
+        "timestamp_utc",
+        "user_id",
+        "session_id",
+        "sample_index",
+        "question_index",
+        "paragraph_id",
+        "paragraph_text",
+        "participant_question",
+        "prediction_label",
+        "prediction_confidence",
+        "response_a_type",
+        "response_a_method",
+        "response_a_text",
+        "response_b_type",
+        "response_b_method",
+        "response_b_text",
+        "baseline_method",
+        "planner_tools",
+        "planner_intent",
+        "planner_rationale",
+        "rating_clarity",
+        "rating_clarity_winner",
+        "rating_accuracy",
+        "rating_accuracy_winner",
+        "rating_helpfulness",
+        "rating_helpfulness_winner",
+    ]
+
+    write_header = not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        data = {key: row.get(key, "") for key in fieldnames}
+        data["timestamp_utc"] = data["timestamp_utc"] or datetime.now(timezone.utc).isoformat()
+        writer.writerow(data)
+
+
+async def _send_pairwise_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    flow = context.user_data.get("pairwise_flow")
+    if not flow:
+        return
+
+    step = flow["step"]
+    if step >= len(PAIRWISE_CRITERIA):
+        await _finish_pairwise_evaluation(update, context)
+        return
+
+    _, question = PAIRWISE_CRITERIA[step]
+    await _send_message(
+        update,
+        context,
+        _format_box("Please Compare Response A and Response B", question),
+        reply_markup=_comparison_keyboard(step),
+    )
+
+
+async def _handle_pairwise_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    query = update.callback_query
+    if query is None:
+        return False
+
+    raw = (query.data or "").strip()
+    if raw.startswith("again:"):
+        await query.answer()
+        await _handle_ask_another(update, context, raw.split(":", 1)[1])
+        return True
+
+    if not raw.startswith("cmp:"):
+        return False
+
+    flow = context.user_data.get("pairwise_flow")
+    if not flow:
+        return False
+
+    await query.answer()
+    parts = raw.split(":", 2)
+    if len(parts) != 3:
+        return True
+
+    try:
+        step = int(parts[1])
+    except ValueError:
+        return True
+
+    if step != flow.get("step", 0):
+        await query.message.reply_text("Please answer the current comparison question.")
+        return True
+
+    choice = parts[2]
+    criterion_key, _ = PAIRWISE_CRITERIA[step]
+    flow["ratings"][criterion_key] = choice
+    flow["step"] = step + 1
+
+    if flow["step"] < len(PAIRWISE_CRITERIA):
+        await _send_pairwise_prompt(update, context)
+    else:
+        await _finish_pairwise_evaluation(update, context)
+    return True
+
+
+async def _finish_pairwise_evaluation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    flow = context.user_data.get("pairwise_flow")
+    if not flow:
+        return
+
+    label_a = flow["response_a_type"]
+    label_b = flow["response_b_type"]
+    ratings = flow["ratings"]
+
+    _append_interactive_evaluation({
+        "user_id": str(update.effective_user.id),
+        "session_id": flow["session_id"],
+        "sample_index": flow["sample_index"],
+        "question_index": flow["question_index"],
+        "paragraph_id": flow["paragraph_id"],
+        "paragraph_text": flow["paragraph_text"],
+        "participant_question": flow["participant_question"],
+        "prediction_label": flow["prediction_label"],
+        "prediction_confidence": flow["prediction_confidence"],
+        "response_a_type": flow["response_a_type"],
+        "response_a_method": flow["response_a_method"],
+        "response_a_text": flow["response_a_text"],
+        "response_b_type": flow["response_b_type"],
+        "response_b_method": flow["response_b_method"],
+        "response_b_text": flow["response_b_text"],
+        "baseline_method": flow["baseline_method"],
+        "planner_tools": ", ".join(flow.get("planner_tools", [])),
+        "planner_intent": flow.get("planner_intent", ""),
+        "planner_rationale": flow.get("planner_rationale", ""),
+        "rating_clarity": ratings.get("clarity", ""),
+        "rating_clarity_winner": _preference_winner(ratings.get("clarity", ""), label_a, label_b),
+        "rating_accuracy": ratings.get("accuracy", ""),
+        "rating_accuracy_winner": _preference_winner(ratings.get("accuracy", ""), label_a, label_b),
+        "rating_helpfulness": ratings.get("helpfulness", ""),
+        "rating_helpfulness_winner": _preference_winner(ratings.get("helpfulness", ""), label_a, label_b),
+    })
+
+    context.user_data.pop("pairwise_flow", None)
+    await _send_message(
+        update,
+        context,
+        _format_box("Question Complete", "Would you like to ask another question about this same person?"),
+        reply_markup=_ask_another_keyboard(),
+    )
+
+
+async def _handle_ask_another(update: Update, context: ContextTypes.DEFAULT_TYPE, answer: str):
+    if answer == "yes":
+        context.user_data["awaiting_question"] = True
+        sample_number = context.user_data.get("sample_index", 1)
+        await _send_message(
+            update,
+            context,
+            _format_box(
+                f"Ask Another Question About Person {sample_number}",
+                "Type any question about the text or prediction.",
+            ),
+        )
+        return
+
+    context.user_data["awaiting_question"] = False
+    if context.user_data.get("sample_queue"):
+        await _send_message(update, context, _format_box("Moving to the next text sample..."))
+        await _run_next_sample(update, context)
+        return
+
+    await _send_message(update, context, _format_box("Study complete. Thank you for participating."))
+
+
+async def _handle_participant_question(update: Update, context: ContextTypes.DEFAULT_TYPE, question: str):
+    if not question:
+        await update.message.reply_text("Please type a question about the text or prediction.")
+        return
+
+    context.user_data["awaiting_question"] = False
+    sample_number = context.user_data.get("sample_index", 1)
+    question_index = context.user_data.get("question_index", 0) + 1
+    context.user_data["question_index"] = question_index
+
+    paragraph_id = context.user_data.get("current_paragraph_id", "")
+    paragraph_text = context.user_data.get("current_paragraph_text", "")
+    label = context.user_data.get("current_prediction_label", "unknown")
+    conf = context.user_data.get("current_prediction_confidence", 0.0)
+
+    await _send_message(update, context, _format_box("Generating Responses", "Please wait while two responses are generated."))
+
+    try:
+        planner_result, planner_answer = _run_planner_answer(paragraph_text, question)
+        baseline_method = _pick_baseline_method(planner_result)
+        _, baseline_answer = _run_explanation_method(
+            baseline_method,
+            paragraph_id,
+            paragraph_text,
+            label,
+            conf,
+            user_question=question,
+        )
+    except Exception as exc:
+        logger.exception("Failed to generate interactive responses: %s", exc)
+        context.user_data["awaiting_question"] = True
+        await _send_message(
+            update,
+            context,
+            _format_box(
+                "Generation Failed",
+                "Something went wrong while generating the responses. Please try another question.",
+            ),
+        )
+        return
+
+    responses = [
+        {
+            "type": "planner",
+            "method": "MCP",
+            "text": planner_answer,
+        },
+        {
+            "type": "baseline",
+            "method": baseline_method,
+            "text": baseline_answer,
+        },
+    ]
+    random.shuffle(responses)
+
+    await _send_message(
+        update,
+        context,
+        _format_box(
+            f"Question About Person {sample_number}",
+            question,
+        ),
+    )
+    await _pause()
+    await _send_message(update, context, _format_box("Response A", responses[0]["text"]))
+    await _pause()
+    await _send_message(update, context, _format_box("Response B", responses[1]["text"]))
+    await _pause()
+
+    context.user_data["pairwise_flow"] = {
+        "session_id": context.user_data.get("session_id"),
+        "sample_index": sample_number,
+        "question_index": question_index,
+        "paragraph_id": paragraph_id,
+        "paragraph_text": paragraph_text,
+        "participant_question": question,
+        "prediction_label": label,
+        "prediction_confidence": conf,
+        "response_a_type": responses[0]["type"],
+        "response_a_method": responses[0]["method"],
+        "response_a_text": responses[0]["text"],
+        "response_b_type": responses[1]["type"],
+        "response_b_method": responses[1]["method"],
+        "response_b_text": responses[1]["text"],
+        "baseline_method": baseline_method,
+        "planner_tools": planner_result.get("selected_tools", []),
+        "planner_intent": planner_result.get("intent", ""),
+        "planner_rationale": planner_result.get("rationale", ""),
+        "ratings": {"clarity": None, "accuracy": None, "helpfulness": None},
+        "step": 0,
+    }
+    await _send_pairwise_prompt(update, context)
 
 
 async def _handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -395,9 +753,11 @@ async def _begin_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     samples = list(PARAGRAPHS)
     random.shuffle(samples)
-    total = min(10, len(samples))
+    total = min(5, len(samples))
+    context.user_data.clear()
     context.user_data["sample_queue"] = samples[:total]
     context.user_data["sample_index"] = 0
+    context.user_data["question_index"] = 0
     context.user_data["session_id"] = f"{user_id}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
 
     await _run_next_sample(update, context)
@@ -439,27 +799,33 @@ def _run_explanation_method(
     user_text: str,
     forced_label: str,
     forced_conf: float,
+    user_question: str = "",
 ) -> tuple:
-    cached = get_cached_explanation(paragraph_id, method)
+    cache_enabled = not user_question
+    cached = get_cached_explanation(paragraph_id, method) if cache_enabled else None
     if cached:
         console_log = f"Using cached explanation for paragraph {paragraph_id} with method {method}"
         logger.info(console_log)
         return None, cached
 
+    prompt_text = _question_context(user_text, user_question) if user_question else user_text
+
     if method == "SHAP":
         model_result = explain_with_shap(user_text)
         _override_prediction(model_result, forced_label, forced_conf)
         _, _, generate_explanation = _get_shap_pipeline()
-        explanation = generate_explanation(user_text, model_result)
-        save_explanation(paragraph_id, method, explanation)
+        explanation = generate_explanation(prompt_text, model_result)
+        if cache_enabled:
+            save_explanation(paragraph_id, method, explanation)
         return model_result, explanation
 
     if method == "RAG":
         rag_pipeline, generate_explanation, _ = _get_rag_pipeline()
         model_result = rag_pipeline(user_text)
         _override_prediction(model_result, forced_label, forced_conf)
-        explanation = generate_explanation(user_text, model_result)
-        save_explanation(paragraph_id, method, explanation)
+        explanation = generate_explanation(prompt_text, model_result)
+        if cache_enabled:
+            save_explanation(paragraph_id, method, explanation)
         return model_result, explanation
 
     if method == "HYBRID":
@@ -469,24 +835,33 @@ def _run_explanation_method(
             _override_prediction(model_result.shap_result, forced_label, forced_conf)
         if hasattr(model_result, "rag_result") and model_result.rag_result:
             _override_prediction(model_result.rag_result, forced_label, forced_conf)
-        explanation = generate_explanation(user_text, model_result)
-        save_explanation(paragraph_id, method, explanation)
+        explanation = generate_explanation(prompt_text, model_result)
+        if cache_enabled:
+            save_explanation(paragraph_id, method, explanation)
         return model_result, explanation
 
     if method == "MCP":
         run_mcp_pipeline = _get_mcp_pipeline()
-        result = run_mcp_pipeline(user_text, fallback=True, top_k=2)
+        result = run_mcp_pipeline(user_text, fallback=True, top_k=2, user_question=user_question)
         explanation = result.get("explanation", "No explanation returned.")
-        save_explanation(paragraph_id, method, explanation)
+        if cache_enabled:
+            save_explanation(paragraph_id, method, explanation)
         return result, explanation
 
     generate_counterfactuals, _, generate_explanation, _ = _get_cf_pipeline()
     model_result = generate_counterfactuals(user_text, n_candidates=3, n_attempts=2)
     if hasattr(model_result, "pred_label"):
         _override_prediction(model_result, forced_label, forced_conf)
-    explanation = generate_explanation(user_text, model_result)
-    save_explanation(paragraph_id, method, explanation)
+    explanation = generate_explanation(prompt_text, model_result)
+    if cache_enabled:
+        save_explanation(paragraph_id, method, explanation)
     return model_result, explanation
+
+
+def _run_planner_answer(paragraph_text: str, question: str) -> tuple:
+    run_mcp_pipeline = _get_mcp_pipeline()
+    result = run_mcp_pipeline(paragraph_text, fallback=True, top_k=2, user_question=question)
+    return result, result.get("explanation", "No explanation returned.")
 
 
 async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -504,7 +879,6 @@ async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
     paragraph_severity = selected_paragraph["severity"]
 
     label, conf = _prediction_from_text(paragraph_id, paragraph_text)
-    methods = _pick_explanation_methods()
 
     context.user_data["current_paragraph_id"] = paragraph_id
     context.user_data["current_paragraph_text"] = paragraph_text
@@ -531,48 +905,19 @@ async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _send_message(update, context, _format_box("🤖Prediction", label_sentence))
     await _pause()
 
-    _, explanation_1 = _run_explanation_method(methods[0], paragraph_id, paragraph_text, label, conf)
-    _, explanation_2 = _run_explanation_method(methods[1], paragraph_id, paragraph_text, label, conf)
-
-    context.user_data["pending_explanations"] = [
-        (methods[0], explanation_1),
-        (methods[1], explanation_2),
-    ]
-    context.user_data["pending_index"] = 0
-
+    context.user_data["awaiting_question"] = True
     await _send_message(
         update,
         context,
         _format_box(
-            _format_title(f"1st Explanation for Person", f"{sample_number} (Why AI did this prediction ? )"),
-            explanation_1,
+            f"Ask a Question About Person {sample_number}",
+            "You can ask anything about the prediction, for example:\n"
+            "- Why was this prediction made?\n"
+            "- Which words mattered?\n"
+            "- How could the prediction change?\n"
+            "- Why is this not a different severity level?",
         ),
     )
-    await _pause()
-
-    context.user_data["eval_flow"] = {
-        "session_id": context.user_data.get("session_id"),
-        "paragraph_id": paragraph_id,
-        "paragraph_text": paragraph_text,
-        "paragraph_severity": paragraph_severity,
-        "selected_use_case": methods[0],
-        "selected_use_case_name": methods[0],
-        "prediction_label": label,
-        "prediction_confidence": conf,
-        "explanation": explanation_1,
-        "ratings": {"clarity": None, "correctness": None, "helpfulness": None, "trust": None},
-        "step": 0,
-        "prompt_message_id": None,
-    }
-    prompt = _evaluation_prompt(
-        paragraph_text=paragraph_text,
-        explanation=explanation_1,
-        ratings=context.user_data["eval_flow"]["ratings"],
-        step=0,
-    )
-    sent = await _send_message(update, context, prompt, reply_markup=_rating_keyboard())
-    if sent is not None:
-        context.user_data["eval_flow"]["prompt_message_id"] = sent.message_id
 
 
 def _evaluation_prompt(paragraph_text: str, explanation: str, ratings: dict, step: int) -> str:
@@ -591,53 +936,6 @@ def _evaluation_prompt(paragraph_text: str, explanation: str, ratings: dict, ste
         f"Tap {label} score (1-5).",
     ]
     return _format_box("⭐ Please Rate This Explanation", "\n".join(body_lines))
-
-
-# ── Use Case 1: SHAP ─────────────────────────────────────────────────
-async def run_shap_pipeline(update: Update, user_id: int, user_text: str):
-    explain_with_shap, format_debug, generate_shap_explanation = _get_shap_pipeline()
-    logger.info("UC1 SHAP for user %s", user_id)
-
-    paragraph_box = _format_box("1) Paragraph", _format_for_display(user_text))
-    await update.message.reply_text(paragraph_box)
-    await update.message.reply_text("Running SHAP prediction...")
-
-    shap_result = explain_with_shap(user_text)
-    logger.info(format_debug(shap_result))
-
-    label = shap_result.pred_label
-    confidence = shap_result.pred_probs[shap_result.pred_label_idx]
-    top_word = shap_result.top_tokens[0]["token"] if shap_result.top_tokens else "—"
-
-    prediction_box = _format_box(
-        "2) Prediction",
-        _join_box_lines(
-            [
-                f"Level: {label}",
-                f"Confidence: {confidence * 100:.1f}%",
-                f"Key word: {top_word}",
-            ]
-        ),
-    )
-
-    await update.message.reply_text(prediction_box)
-
-    if shap_result.top_tokens:
-        tool_lines = ["Top SHAP tokens:"]
-        for t in shap_result.top_tokens[:6]:
-            arrow = "🔴" if t["shap"] > 0 else "🟢"
-            line = f"{arrow} '{t['token']}' SHAP={t['shap']:+.4f} {t['direction']}"
-            if t["note"]:
-                line += f" ({t['note']})"
-            tool_lines.append(line)
-        await update.message.reply_text(_format_box("3) Tool Result", "\n".join(tool_lines)))
-
-    await update.message.reply_text("Generating full explanation...")
-
-    explanation = generate_shap_explanation(user_text, shap_result)
-    await safe_send(update, _format_box("4) Explanation", explanation))
-
-    await send_footer(update)
 
 
 # ── Use Case 2: RAG ──────────────────────────────────────────────────
@@ -682,157 +980,6 @@ async def run_rag_pipeline(update: Update, user_id: int, user_text: str):
     await safe_send(update, _format_box("4) Explanation", explanation))
 
     await send_footer(update)
-
-
-# ── Use Case 3: Hybrid (SHAP + RAG + CF) ────────────────────────────
-async def run_hybrid_pipeline_handler(update: Update, user_id: int, user_text: str):
-    run_hybrid, format_debug, format_preview, generate_explanation = _get_hybrid_pipeline()
-    logger.info("UC3 Hybrid for user %s", user_id)
-
-    paragraph_box = _format_box("1) Paragraph", _format_for_display(user_text))
-    await update.message.reply_text(paragraph_box)
-
-    await update.message.reply_text(
-        "Running all three XAI pipelines (SHAP + RAG + Counterfactual).\n"
-        "This is the most comprehensive analysis — please allow 30-60 seconds..."
-    )
-
-    result = run_hybrid(user_text)
-    logger.info(format_debug(result))
-
-    prediction_box = _format_box("2) Prediction", format_preview(result))
-
-    await update.message.reply_text(prediction_box)
-
-    detail_lines = ["Detailed evidence from all three signals:"]
-
-    if result.shap_result and result.shap_result.top_tokens:
-        detail_lines.append("\nSHAP — Risk tokens:")
-        for t in result.shap_result.top_tokens[:5]:
-            arrow = "🔴" if t["shap"] > 0 else "🟢"
-            detail_lines.append(f"{arrow} '{t['token']}' SHAP={t['shap']:+.4f} {t['direction']}")
-
-    if result.rag_result and result.rag_result.retrieved_docs:
-        detail_lines.append("\nRAG — Matched PHQ-8 symptoms:")
-        for i, doc in enumerate(result.rag_result.retrieved_docs, 1):
-            detail_lines.append(
-                f"{i}. {doc.symptom_name} ({doc.symptom_type})\n   {doc.clinical_definition[:90]}..."
-            )
-
-    if result.cf_result and result.cf_result.candidates:
-        detail_lines.append("\nCounterfactual — Candidates:")
-        for i, c in enumerate(result.cf_result.candidates[:3], 1):
-            status = "FLIP" if c["flip_success"] else "no flip"
-            detail_lines.append(
-                f"{i}. [{status}] [{c['label']}] min={c['minimality']:.2f}\n   \"{c['text'][:100]}\""
-            )
-
-    if len(detail_lines) > 1:
-        await update.message.reply_text(_format_box("3) Tool Result", "\n".join(detail_lines)))
-
-    await update.message.reply_text("Generating full explanation...")
-
-    explanation = generate_explanation(user_text, result)
-    await safe_send(update, _format_box("4) Explanation", explanation))
-
-    await send_footer(update)
-
-
-# ── Use Case 4: Counterfactual ───────────────────────────────────────
-async def run_cf_pipeline(update: Update, user_id: int, user_text: str):
-    generate_counterfactuals, format_cf_debug, generate_cf_explanation, format_cf_preview = _get_cf_pipeline()
-    logger.info("UC4 CF for user %s", user_id)
-
-    paragraph_box = _format_box("1) Paragraph", _format_for_display(user_text))
-    await update.message.reply_text(paragraph_box)
-
-    await update.message.reply_text(
-        "Generating counterfactuals (SHAP + multiple LLM calls).\n"
-        "This may take 20-40 seconds..."
-    )
-
-    result = generate_counterfactuals(user_text, n_candidates=3, n_attempts=2)
-    logger.info(format_cf_debug(result))
-
-    prediction_box = _format_box("2) Prediction", format_cf_preview(result))
-
-    await update.message.reply_text(prediction_box)
-
-    if result.candidates:
-        lines = ["Counterfactual candidates:"]
-        for i, c in enumerate(result.candidates[:3], 1):
-            status = "FLIP" if c["flip_success"] else "no flip"
-            lines.append(
-                f"{i}. [{status}] Predicted: {c['label']}\n"
-                f"   Minimality: {c['minimality']:.2f}  Meaning kept: {c['semantic_sim']:.2f}\n"
-                f"   \"{c['text'][:110]}\""
-            )
-        await update.message.reply_text(_format_box("3) Tool Result", "\n".join(lines)))
-
-    await update.message.reply_text("Generating full explanation...")
-
-    explanation = generate_cf_explanation(user_text, result)
-    await safe_send(update, _format_box("4) Explanation", explanation))
-
-    await send_footer(update)
-
-
-# ── Use Case 5: MCP ─────────────────────────────────────────────────
-async def run_mcp_pipeline_handler(update: Update, user_id: int, user_text: str):
-    run_mcp_pipeline = _get_mcp_pipeline()
-    logger.info("UC5 MCP for user %s", user_id)
-
-    paragraph_box = _format_box("1) Paragraph", _format_for_display(user_text))
-    await update.message.reply_text(paragraph_box)
-
-    await update.message.reply_text(
-        "Running MCP modular pipeline.\n"
-        "This may take a few seconds..."
-    )
-
-    result = run_mcp_pipeline(user_text)
-
-    label = result.get("prediction", "unknown")
-    confidence = float(result.get("confidence", 0.0) or 0.0)
-    selected_server = result.get("selected_server", "n/a")
-    fallback_used = bool(result.get("fallback_used", False))
-    rationale = result.get("rationale", "")
-    explanation = result.get("explanation", "No explanation returned.")
-    errors = result.get("errors", []) or []
-
-    prediction_box = _format_box(
-        "2) Prediction",
-        _join_box_lines(
-            [
-                f"Level: {label}",
-                f"Confidence: {confidence * 100:.1f}%",
-                f"Selected server: {selected_server}",
-                f"Fallback used: {'yes' if fallback_used else 'no'}",
-            ]
-        ),
-    )
-
-    await update.message.reply_text(prediction_box)
-
-    detail_lines = ["MCP decision details:"]
-    if rationale:
-        detail_lines.append(f"Rationale: {rationale}")
-
-    if errors:
-        detail_lines.append("")
-        detail_lines.append("Errors:")
-        for i, e in enumerate(errors, 1):
-            detail_lines.append(f"{i}. {e}")
-
-    if len(detail_lines) > 1:
-        await update.message.reply_text(_format_box("3) Tool Result", "\n".join(detail_lines)))
-
-    await update.message.reply_text("Generating full explanation...")
-
-    await safe_send(update, _format_box("4) Explanation", explanation))
-
-    await send_footer(update)
-
 
 # ── Bot entrypoint ───────────────────────────────────────────────────
 async def _on_startup(app: Application):
