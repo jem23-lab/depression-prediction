@@ -181,7 +181,7 @@ USE_CASES = {
     "2": "RAG",
     "3": "HYBRID",
     "4": "COUNTERFACTUAL",
-    # "5": "MCP",
+    "5": "MCP",
 }
 
 EVAL_CRITERIA = [
@@ -404,7 +404,7 @@ async def _begin_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def _pick_explanation_methods() -> list:
-    methods = ["SHAP", "RAG", "HYBRID", "COUNTERFACTUAL"]
+    methods = ["SHAP", "RAG", "HYBRID", "COUNTERFACTUAL", "MCP"]
     return random.sample(methods, 2)
 
 
@@ -475,7 +475,7 @@ def _run_explanation_method(
 
     if method == "MCP":
         run_mcp_pipeline = _get_mcp_pipeline()
-        result = run_mcp_pipeline(user_text)
+        result = run_mcp_pipeline(user_text, fallback=True, top_k=2)
         explanation = result.get("explanation", "No explanation returned.")
         save_explanation(paragraph_id, method, explanation)
         return result, explanation
