@@ -94,6 +94,35 @@ def _get_mcp_pipeline():
     return run_mcp_pipeline
 
 
+_MENTALT5_PIPELINE = None
+
+
+def _get_mentalt5_pipeline():
+    global _MENTALT5_PIPELINE
+    if _MENTALT5_PIPELINE is not None:
+        return _MENTALT5_PIPELINE
+
+    import torch
+    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+    model_id = os.environ.get("MENTALT5_MODEL_ID", "Tianlin668/MentalT5")
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+    device = os.environ.get("MENTALT5_DEVICE", "").strip()
+    if not device:
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+    model.to(device)
+    model.eval()
+
+    _MENTALT5_PIPELINE = tokenizer, model, device
+    return _MENTALT5_PIPELINE
+
+
 # ── Helpers ──────────────────────────────────────────────────────────
 async def safe_send(update: Update, text: str, chunk_size: int = 4000):
     """Strip Markdown symbols and chunk-send as plain text."""
@@ -504,15 +533,7 @@ async def _handle_participant_question(update: Update, context: ContextTypes.DEF
 
     try:
         planner_result, planner_answer = _run_planner_answer(paragraph_text, question)
-        baseline_method = _pick_baseline_method(planner_result)
-        _, baseline_answer = _run_explanation_method(
-            baseline_method,
-            paragraph_id,
-            paragraph_text,
-            label,
-            conf,
-            user_question=question,
-        )
+        mentallama_answer = _run_mentalt5_answer(paragraph_text, question)
     except Exception as exc:
         logger.exception("Failed to generate interactive responses: %s", exc)
         context.user_data["awaiting_question"] = True
@@ -533,9 +554,9 @@ async def _handle_participant_question(update: Update, context: ContextTypes.DEF
             "text": planner_answer,
         },
         {
-            "type": "baseline",
-            "method": baseline_method,
-            "text": baseline_answer,
+            "type": "mentallama",
+            "method": "MentalT5",
+            "text": mentallama_answer,
         },
     ]
     random.shuffle(responses)
@@ -569,7 +590,7 @@ async def _handle_participant_question(update: Update, context: ContextTypes.DEF
         "response_b_type": responses[1]["type"],
         "response_b_method": responses[1]["method"],
         "response_b_text": responses[1]["text"],
-        "baseline_method": baseline_method,
+        "baseline_method": "MentalT5",
         "planner_tools": planner_result.get("selected_tools", []),
         "planner_intent": planner_result.get("intent", ""),
         "planner_rationale": planner_result.get("rationale", ""),
@@ -869,6 +890,25 @@ def _run_planner_answer(paragraph_text: str, question: str) -> tuple:
     run_mcp_pipeline = _get_mcp_pipeline()
     result = run_mcp_pipeline(paragraph_text, fallback=True, top_k=2, user_question=question)
     return result, result.get("explanation", "No explanation returned.")
+
+
+def _run_mentalt5_answer(paragraph_text: str, question: str) -> str:
+    tokenizer, model, device = _get_mentalt5_pipeline()
+    model_input = f"Consider this post: {paragraph_text.strip()} Question: {question.strip()}"
+    inputs = tokenizer(
+        model_input,
+        return_tensors="pt",
+        max_length=1024,
+        truncation=True,
+    )
+    inputs = {key: value.to(device) for key, value in inputs.items()}
+
+    outputs = model.generate(
+        **inputs,
+        max_new_tokens=int(os.environ.get("MENTALT5_MAX_NEW_TOKENS", "256")),
+    )
+    answer = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+    return answer or "No response returned."
 
 
 async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):

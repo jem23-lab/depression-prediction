@@ -18,6 +18,7 @@ joblib
 transformers
 torch
 accelerate
+sentencepiece
 llama-cpp-python
 openai
 

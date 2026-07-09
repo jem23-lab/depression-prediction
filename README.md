@@ -77,10 +77,16 @@ The bot is evaluation-first (no menu). When the user sends `/begin`:
 2. For each sample, it shows:
    - 1) Text Sample
    - 2) Prediction
-   - 3) Explanation 1 (random method)
-   - 4) Explanation 2 (random, different method)
-   - 5) Rating prompt (buttons 1–5)
-3. Ratings are stored in `logs/evaluation_records.csv`.
+   - 3) Participant question prompt
+   - 4) Two anonymous responses: Planner (MCP) and MentalT5
+   - 5) Pairwise comparison prompts
+3. Pairwise ratings are stored in `logs/interactive_evaluation_records.csv`.
+
+The MentalT5 response uses `Tianlin668/MentalT5` through Hugging Face Transformers.
+No additional system prompt or explanation template is added; the model receives only
+the participant text and question in the upstream format:
+`Consider this post: <text> Question: <question>`. You can override the model id
+with `MENTALT5_MODEL_ID` and generation length with `MENTALT5_MAX_NEW_TOKENS`.
 
 ## Explanation style (important)
 
