@@ -26,7 +26,7 @@ import re
 import asyncio
 import torch
 
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import LlamaTokenizer, LlamaForCausalLM
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -100,11 +100,10 @@ def _get_mentallama_pipeline():
     if _MENTALLAMA_PIPELINE is not None:
         return _MENTALLAMA_PIPELINE
 
-    model_id = os.environ.get("MENTALLAMA_MODEL_ID", "klyang/MentaLLaMA-chat-7B")
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    model = AutoModelForCausalLM.from_pretrained(model_id)
+
+    tokenizer = LlamaTokenizer.from_pretrained('klyang/MentaLLaMA-chat-7B')
+    model = LlamaForCausalLM.from_pretrained('klyang/MentaLLaMA-chat-7B', device_map='auto')
+
     device = os.environ.get("MENTALLAMA_DEVICE", "").strip()
     if not device:
         if torch.cuda.is_available():
