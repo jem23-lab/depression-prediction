@@ -78,15 +78,16 @@ The bot is evaluation-first (no menu). When the user sends `/begin`:
    - 1) Text Sample
    - 2) Prediction
    - 3) Participant question prompt
-   - 4) Two anonymous responses: Planner (MCP) and MentalT5
+   - 4) Two anonymous responses: Planner (MCP) and MentalLLaMA
    - 5) Pairwise comparison prompts
 3. Pairwise ratings are stored in `logs/interactive_evaluation_records.csv`.
 
-The MentalT5 response uses `Tianlin668/MentalT5` through Hugging Face Transformers.
-No additional system prompt or explanation template is added; the model receives only
-the participant text and question in the upstream format:
+The MentalLLaMA response uses `klyang/MentaLLaMA-chat-7B` through Hugging Face
+Transformers. The model receives only the participant text and question in the
+upstream comparison format:
 `Consider this post: <text> Question: <question>`. You can override the model id
-with `MENTALT5_MODEL_ID` and generation length with `MENTALT5_MAX_NEW_TOKENS`.
+with `MENTALLAMA_MODEL_ID`, the device with `MENTALLAMA_DEVICE`, and generation
+length with `MENTALLAMA_MAX_NEW_TOKENS`.
 
 ## Explanation style (important)
 

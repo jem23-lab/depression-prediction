@@ -24,7 +24,9 @@ import csv
 from datetime import datetime, timezone
 import re
 import asyncio
+import torch
 
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -34,11 +36,6 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-
-# ── Path setup ───────────────────────────────────────────────────────
-_ROOT = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, _ROOT)
-
 from shared.conversation import process_message
 from shared.llm_client import strip_markdown
 from shared.depression_model import load as preload_model
@@ -52,6 +49,10 @@ from shared.training_examples import (
 )
 from shared.depression_model import explain_with_shap, predict_proba, classify_severity, LABEL_MAP
 
+# ── Path setup ───────────────────────────────────────────────────────
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _ROOT)
+
 # ── Logging ──────────────────────────────────────────────────────────
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -59,6 +60,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("depression_bot")
 
+_MENTALLAMA_PIPELINE = None
 
 # ── Lazy pipeline importers ──────────────────────────────────────────
 def _get_shap_pipeline():
@@ -93,22 +95,17 @@ def _get_mcp_pipeline():
     from architecture.mcp_modular_agent.mcp_client import run_mcp_pipeline
     return run_mcp_pipeline
 
+def _get_mentallama_pipeline():
+    global _MENTALLAMA_PIPELINE
+    if _MENTALLAMA_PIPELINE is not None:
+        return _MENTALLAMA_PIPELINE
 
-_MENTALT5_PIPELINE = None
-
-
-def _get_mentalt5_pipeline():
-    global _MENTALT5_PIPELINE
-    if _MENTALT5_PIPELINE is not None:
-        return _MENTALT5_PIPELINE
-
-    import torch
-    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-
-    model_id = os.environ.get("MENTALT5_MODEL_ID", "Tianlin668/MentalT5")
+    model_id = os.environ.get("MENTALLAMA_MODEL_ID", "klyang/MentaLLaMA-chat-7B")
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-    device = os.environ.get("MENTALT5_DEVICE", "").strip()
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    model = AutoModelForCausalLM.from_pretrained(model_id)
+    device = os.environ.get("MENTALLAMA_DEVICE", "").strip()
     if not device:
         if torch.cuda.is_available():
             device = "cuda"
@@ -119,8 +116,8 @@ def _get_mentalt5_pipeline():
     model.to(device)
     model.eval()
 
-    _MENTALT5_PIPELINE = tokenizer, model, device
-    return _MENTALT5_PIPELINE
+    _MENTALLAMA_PIPELINE = tokenizer, model, device
+    return _MENTALLAMA_PIPELINE
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -533,7 +530,7 @@ async def _handle_participant_question(update: Update, context: ContextTypes.DEF
 
     try:
         planner_result, planner_answer = _run_planner_answer(paragraph_text, question)
-        mentallama_answer = _run_mentalt5_answer(paragraph_text, question)
+        mentallama_answer = _run_mentallama_answer(paragraph_text, question)
     except Exception as exc:
         logger.exception("Failed to generate interactive responses: %s", exc)
         context.user_data["awaiting_question"] = True
@@ -555,7 +552,7 @@ async def _handle_participant_question(update: Update, context: ContextTypes.DEF
         },
         {
             "type": "mentallama",
-            "method": "MentalT5",
+            "method": "MentalLLaMA",
             "text": mentallama_answer,
         },
     ]
@@ -590,7 +587,7 @@ async def _handle_participant_question(update: Update, context: ContextTypes.DEF
         "response_b_type": responses[1]["type"],
         "response_b_method": responses[1]["method"],
         "response_b_text": responses[1]["text"],
-        "baseline_method": "MentalT5",
+        "baseline_method": "MentalLLaMA",
         "planner_tools": planner_result.get("selected_tools", []),
         "planner_intent": planner_result.get("intent", ""),
         "planner_rationale": planner_result.get("rationale", ""),
@@ -892,22 +889,30 @@ def _run_planner_answer(paragraph_text: str, question: str) -> tuple:
     return result, result.get("explanation", "No explanation returned.")
 
 
-def _run_mentalt5_answer(paragraph_text: str, question: str) -> str:
-    tokenizer, model, device = _get_mentalt5_pipeline()
+def _run_mentallama_answer(paragraph_text: str, question: str) -> str:
+    tokenizer, model, device = _get_mentallama_pipeline()
     model_input = f"Consider this post: {paragraph_text.strip()} Question: {question.strip()}"
+
     inputs = tokenizer(
         model_input,
         return_tensors="pt",
-        max_length=1024,
+        max_length=int(os.environ.get("MENTALLAMA_MAX_INPUT_TOKENS", "2048")),
         truncation=True,
     )
     inputs = {key: value.to(device) for key, value in inputs.items()}
 
-    outputs = model.generate(
-        **inputs,
-        max_new_tokens=int(os.environ.get("MENTALT5_MAX_NEW_TOKENS", "256")),
-    )
-    answer = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+    do_sample = os.environ.get("MENTALLAMA_DO_SAMPLE", "false").lower() == "true"
+    generation_kwargs = {
+        "max_new_tokens": int(os.environ.get("MENTALLAMA_MAX_NEW_TOKENS", "1024")),
+        "do_sample": do_sample,
+        "pad_token_id": tokenizer.eos_token_id,
+    }
+    if do_sample:
+        generation_kwargs["temperature"] = float(os.environ.get("MENTALLAMA_TEMPERATURE", "0.7"))
+
+    outputs = model.generate(**inputs, **generation_kwargs)
+    generated_tokens = outputs[0][inputs["input_ids"].shape[-1]:]
+    answer = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
     return answer or "No response returned."
 
 
