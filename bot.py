@@ -26,12 +26,10 @@ import re
 import asyncio
 import torch
 
-# Keep large Hugging Face downloads out of the small /home quota on NTUU.
 _MENTALLAMA_DEFAULT_CACHE_DIR = "/scratch/apriyadar/huggingface"
 os.environ.setdefault("HF_HOME", _MENTALLAMA_DEFAULT_CACHE_DIR)
 os.environ.setdefault("HF_HUB_CACHE", os.path.join(_MENTALLAMA_DEFAULT_CACHE_DIR, "hub"))
 os.environ.setdefault("TRANSFORMERS_CACHE", os.path.join(_MENTALLAMA_DEFAULT_CACHE_DIR, "transformers"))
-os.environ.setdefault("MENTALLAMA_CACHE_DIR", _MENTALLAMA_DEFAULT_CACHE_DIR)
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 from transformers import LlamaTokenizer, LlamaForCausalLM
@@ -104,20 +102,13 @@ def _get_mcp_pipeline():
     return run_mcp_pipeline
 
 
-def _env_flag(name: str, default: str = "false") -> bool:
-    return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _mentallama_load_kwargs() -> dict:
-    cache_dir = os.environ.get("MENTALLAMA_CACHE_DIR", _MENTALLAMA_DEFAULT_CACHE_DIR).strip()
-    os.makedirs(cache_dir, exist_ok=True)
-
-    kwargs = {"cache_dir": cache_dir}
-    if _env_flag("MENTALLAMA_LOCAL_FILES_ONLY", "true"):
-        kwargs["local_files_only"] = True
-    if not _env_flag("MENTALLAMA_USE_SAFETENSORS", "false"):
-        kwargs["use_safetensors"] = False
-    return kwargs
+    os.makedirs(_MENTALLAMA_DEFAULT_CACHE_DIR, exist_ok=True)
+    return {
+        "cache_dir": _MENTALLAMA_DEFAULT_CACHE_DIR,
+        "local_files_only": True,
+        "use_safetensors": False,
+    }
 
 
 def _get_mentallama_pipeline():
@@ -128,33 +119,35 @@ def _get_mentallama_pipeline():
     model_id = os.environ.get("MENTALLAMA_MODEL_ID", "klyang/MentaLLaMA-chat-7B")
     load_kwargs = _mentallama_load_kwargs()
 
-    tokenizer = LlamaTokenizer.from_pretrained(model_id, **load_kwargs)
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    try:
+        tokenizer = LlamaTokenizer.from_pretrained(model_id, **load_kwargs)
+        if tokenizer.pad_token_id is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
-    model_kwargs = dict(load_kwargs)
-    torch_dtype = os.environ.get("MENTALLAMA_TORCH_DTYPE", "").strip()
-    if torch_dtype:
-        model_kwargs["torch_dtype"] = getattr(torch, torch_dtype)
+        model_kwargs = dict(load_kwargs)
+        torch_dtype = os.environ.get("MENTALLAMA_TORCH_DTYPE", "").strip()
+        if torch_dtype:
+            if not hasattr(torch, torch_dtype):
+                raise ValueError(f"Unsupported MENTALLAMA_TORCH_DTYPE={torch_dtype!r}")
+            model_kwargs["torch_dtype"] = getattr(torch, torch_dtype)
 
-    use_device_map = _env_flag("MENTALLAMA_DEVICE_MAP_AUTO", "true")
-    if use_device_map:
         model_kwargs["device_map"] = "auto"
+        offload_dir = os.path.join(_MENTALLAMA_DEFAULT_CACHE_DIR, "offload")
+        os.makedirs(offload_dir, exist_ok=True)
+        model_kwargs["offload_folder"] = offload_dir
+        model_kwargs["offload_state_dict"] = True
 
-    model = LlamaForCausalLM.from_pretrained(model_id, **model_kwargs)
+        model = LlamaForCausalLM.from_pretrained(model_id, **model_kwargs)
+    except Exception as exc:
+        logger.exception(
+            "Failed to load MentaLLaMA model_id=%s from local cache_dir=%s: %s",
+            model_id,
+            _MENTALLAMA_DEFAULT_CACHE_DIR,
+            exc,
+        )
+        raise
 
-    device = os.environ.get("MENTALLAMA_DEVICE", "").strip()
-    if use_device_map:
-        device = next(model.parameters()).device
-    elif not device:
-        if torch.cuda.is_available():
-            device = "cuda"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            device = "mps"
-        else:
-            device = "cpu"
-    if not use_device_map:
-        model.to(device)
+    device = next(model.parameters()).device
     model.eval()
 
     _MENTALLAMA_PIPELINE = tokenizer, model, device

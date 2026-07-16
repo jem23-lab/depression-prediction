@@ -56,17 +56,8 @@ pip install -r requirements.txt
 export GOOGLE_API_KEY="your_key"
 export TELEGRAM_BOT_TOKEN="your_token"
 
-# Recommended local runtime settings
-export MENTALLAMA_CACHE_DIR="$PWD/.hf_cache"
-export HF_HOME="$PWD/.hf_cache"
-export HF_HUB_CACHE="$PWD/.hf_cache/hub"
-export TRANSFORMERS_CACHE="$PWD/.hf_cache/transformers"
-export HF_HUB_DISABLE_XET="1"
-
-# Optional MentalLLaMA settings; keep these defaults unless you need to change them
+# MentalLLaMA is loaded local-only from /scratch/apriyadar/huggingface
 export MENTALLAMA_MODEL_ID="klyang/MentaLLaMA-chat-7B"
-export MENTALLAMA_DEVICE_MAP_AUTO="true"
-export MENTALLAMA_USE_SAFETENSORS="false"
 export MENTALLAMA_MAX_INPUT_TOKENS="2048"
 export MENTALLAMA_MAX_NEW_TOKENS="1024"
 export MENTALLAMA_DO_SAMPLE="false"
@@ -95,17 +86,8 @@ Optional environment variables:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `MENTALLAMA_CACHE_DIR` | `/scratch/apriyadar/huggingface` | Local path for the MentalLLaMA model cache |
-| `HF_HOME` | `/scratch/apriyadar/huggingface` | Hugging Face cache root |
-| `HF_HUB_CACHE` | `/scratch/apriyadar/huggingface/hub` | Hugging Face Hub cache |
-| `TRANSFORMERS_CACHE` | `/scratch/apriyadar/huggingface/transformers` | Transformers cache |
-| `HF_HUB_DISABLE_XET` | `1` | Disables Xet-backed downloads |
 | `MENTALLAMA_MODEL_ID` | `klyang/MentaLLaMA-chat-7B` | MentalLLaMA model id |
-| `MENTALLAMA_DEVICE_MAP_AUTO` | `true` | Lets Transformers place the model automatically |
-| `MENTALLAMA_DEVICE` | auto-detected | Device when `MENTALLAMA_DEVICE_MAP_AUTO=false`, for example `cpu`, `mps`, or `cuda` |
 | `MENTALLAMA_TORCH_DTYPE` | unset | Optional PyTorch dtype name, for example `float16` |
-| `MENTALLAMA_LOCAL_FILES_ONLY` | `true` | Use only already-downloaded model files |
-| `MENTALLAMA_USE_SAFETENSORS` | `false` | Avoid Transformers safetensors auto-conversion for this model |
 | `MENTALLAMA_MAX_INPUT_TOKENS` | `2048` | Max prompt tokens for MentalLLaMA |
 | `MENTALLAMA_MAX_NEW_TOKENS` | `1024` | Max generated tokens for MentalLLaMA |
 | `MENTALLAMA_DO_SAMPLE` | `false` | Enables sampling |
@@ -149,8 +131,10 @@ The MentalLLaMA response uses `klyang/MentaLLaMA-chat-7B` through Hugging Face
 Transformers. The model receives only the participant text and question in the
 upstream comparison format:
 `Consider this post: <text> Question: <question>`. You can override the model id
-with `MENTALLAMA_MODEL_ID`, the device with `MENTALLAMA_DEVICE`, and generation
-length with `MENTALLAMA_MAX_NEW_TOKENS`.
+with `MENTALLAMA_MODEL_ID` and generation length with
+`MENTALLAMA_MAX_NEW_TOKENS`. The model loader uses local files only from
+`/scratch/apriyadar/huggingface` and writes any automatic disk offload files to
+`/scratch/apriyadar/huggingface/offload`.
 
 ## Explanation style (important)
 
