@@ -113,7 +113,7 @@ def _mentallama_load_kwargs() -> dict:
     os.makedirs(cache_dir, exist_ok=True)
 
     kwargs = {"cache_dir": cache_dir}
-    if _env_flag("MENTALLAMA_LOCAL_FILES_ONLY"):
+    if _env_flag("MENTALLAMA_LOCAL_FILES_ONLY", "true"):
         kwargs["local_files_only"] = True
     return kwargs
 

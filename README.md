@@ -40,24 +40,85 @@ explainableDepressionPrediction_mcp_server/
 | FAISS RAG index | ❌ UC2 only | Only RAG needs it |
 | Prompt builders | ❌ per-UC | Different explanation formats |
 
-## Setup
+## Start the Application
+
+Run these commands from the project root:
 
 ```bash
-# 1. Install dependencies
+# Create and activate a virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
 pip install -r requirements.txt
 
-# 2. Test without Telegram
+# Required keys
 export GOOGLE_API_KEY="your_key"
+export TELEGRAM_BOT_TOKEN="your_token"
 
+# Recommended local runtime settings
+export MENTALLAMA_CACHE_DIR="$PWD/.hf_cache"
+export HF_HOME="$PWD/.hf_cache"
+export HF_HUB_CACHE="$PWD/.hf_cache/hub"
+export TRANSFORMERS_CACHE="$PWD/.hf_cache/transformers"
+export HF_HUB_DISABLE_XET="1"
+
+# Optional MentalLLaMA settings; keep these defaults unless you need to change them
+export MENTALLAMA_MODEL_ID="klyang/MentaLLaMA-chat-7B"
+export MENTALLAMA_DEVICE_MAP_AUTO="true"
+export MENTALLAMA_MAX_INPUT_TOKENS="2048"
+export MENTALLAMA_MAX_NEW_TOKENS="1024"
+export MENTALLAMA_DO_SAMPLE="false"
+
+# Optional counterfactual setting
+export CF_SEMANTIC_MODE="lexical"
+
+# Smoke-test a pipeline without Telegram
+python test_pipeline.py --uc 1 --scenario indirect
+
+# Start the Telegram bot
+python bot.py
+```
+
+In Telegram, open the bot linked to `TELEGRAM_BOT_TOKEN` and send `/begin` to
+start a study session.
+
+Required environment variables:
+
+| Variable | Purpose |
+|----------|---------|
+| `GOOGLE_API_KEY` | Gemini API key used by the explainer pipelines |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather |
+
+Optional environment variables:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MENTALLAMA_CACHE_DIR` | `/scratch/apriyadar/huggingface` | Local path for the MentalLLaMA model cache |
+| `HF_HOME` | `/scratch/apriyadar/huggingface` | Hugging Face cache root |
+| `HF_HUB_CACHE` | `/scratch/apriyadar/huggingface/hub` | Hugging Face Hub cache |
+| `TRANSFORMERS_CACHE` | `/scratch/apriyadar/huggingface/transformers` | Transformers cache |
+| `HF_HUB_DISABLE_XET` | `1` | Disables Xet-backed downloads |
+| `MENTALLAMA_MODEL_ID` | `klyang/MentaLLaMA-chat-7B` | MentalLLaMA model id |
+| `MENTALLAMA_DEVICE_MAP_AUTO` | `true` | Lets Transformers place the model automatically |
+| `MENTALLAMA_DEVICE` | auto-detected | Device when `MENTALLAMA_DEVICE_MAP_AUTO=false`, for example `cpu`, `mps`, or `cuda` |
+| `MENTALLAMA_TORCH_DTYPE` | unset | Optional PyTorch dtype name, for example `float16` |
+| `MENTALLAMA_LOCAL_FILES_ONLY` | `true` | Use only already-downloaded model files |
+| `MENTALLAMA_MAX_INPUT_TOKENS` | `2048` | Max prompt tokens for MentalLLaMA |
+| `MENTALLAMA_MAX_NEW_TOKENS` | `1024` | Max generated tokens for MentalLLaMA |
+| `MENTALLAMA_DO_SAMPLE` | `false` | Enables sampling |
+| `MENTALLAMA_TEMPERATURE` | `0.7` | Sampling temperature when sampling is enabled |
+| `CF_SEMANTIC_MODE` | `lexical` | Counterfactual similarity mode |
+
+Useful local test commands:
+
+```bash
 python test_pipeline.py --uc 1 --scenario indirect   # SHAP
 python test_pipeline.py --uc 2 --scenario indirect   # RAG
+python test_pipeline.py --uc 3 --scenario moderate   # Hybrid
+python test_pipeline.py --uc 4 --scenario severe     # Counterfactual
+python test_pipeline.py --uc 5 --scenario moderate   # MCP router
 python test_pipeline.py --uc 1 --text "I feel empty and hopeless every day."
-python test_pipeline.py --uc 2 --text "I can't sleep and have no appetite."
-
-# 3. Run the bot
-export TELEGRAM_BOT_TOKEN="your_token"
-export GOOGLE_API_KEY="your_key"
-python bot.py
 ```
 
 ## Simple model demo
@@ -134,14 +195,3 @@ python scripts/cache_explanations.py --only-ids daic_woz_severe_321,daic_woz_no_
 Optional flags:
 - `--save-pred` to store `prediction_label` and `prediction_confidence` if missing.
 - `--dry-run` to print what would be generated without calling any models.
-
-## Run
-
-```bash
-pip install -r requirements.txt
-export TELEGRAM_BOT_TOKEN="your_token"
-export GOOGLE_API_KEY="your_key"
-python bot.py
-```
-
-In Telegram, use `/begin` to start each study session.
