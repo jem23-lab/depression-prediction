@@ -26,6 +26,14 @@ import re
 import asyncio
 import torch
 
+# Keep large Hugging Face downloads out of the small /home quota on NTUU.
+_MENTALLAMA_DEFAULT_CACHE_DIR = "/scratch/apriyadar/huggingface"
+os.environ.setdefault("HF_HOME", _MENTALLAMA_DEFAULT_CACHE_DIR)
+os.environ.setdefault("HF_HUB_CACHE", os.path.join(_MENTALLAMA_DEFAULT_CACHE_DIR, "hub"))
+os.environ.setdefault("TRANSFORMERS_CACHE", os.path.join(_MENTALLAMA_DEFAULT_CACHE_DIR, "transformers"))
+os.environ.setdefault("MENTALLAMA_CACHE_DIR", _MENTALLAMA_DEFAULT_CACHE_DIR)
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
 from transformers import LlamaTokenizer, LlamaForCausalLM
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -95,24 +103,56 @@ def _get_mcp_pipeline():
     from architecture.mcp_modular_agent.mcp_client import run_mcp_pipeline
     return run_mcp_pipeline
 
+
+def _env_flag(name: str, default: str = "false") -> bool:
+    return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _mentallama_load_kwargs() -> dict:
+    cache_dir = os.environ.get("MENTALLAMA_CACHE_DIR", _MENTALLAMA_DEFAULT_CACHE_DIR).strip()
+    os.makedirs(cache_dir, exist_ok=True)
+
+    kwargs = {"cache_dir": cache_dir}
+    if _env_flag("MENTALLAMA_LOCAL_FILES_ONLY"):
+        kwargs["local_files_only"] = True
+    return kwargs
+
+
 def _get_mentallama_pipeline():
     global _MENTALLAMA_PIPELINE
     if _MENTALLAMA_PIPELINE is not None:
         return _MENTALLAMA_PIPELINE
 
+    model_id = os.environ.get("MENTALLAMA_MODEL_ID", "klyang/MentaLLaMA-chat-7B")
+    load_kwargs = _mentallama_load_kwargs()
 
-    tokenizer = LlamaTokenizer.from_pretrained('klyang/MentaLLaMA-chat-7B')
-    model = LlamaForCausalLM.from_pretrained('klyang/MentaLLaMA-chat-7B', device_map='auto')
+    tokenizer = LlamaTokenizer.from_pretrained(model_id, **load_kwargs)
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model_kwargs = dict(load_kwargs)
+    torch_dtype = os.environ.get("MENTALLAMA_TORCH_DTYPE", "").strip()
+    if torch_dtype:
+        model_kwargs["torch_dtype"] = getattr(torch, torch_dtype)
+
+    use_device_map = _env_flag("MENTALLAMA_DEVICE_MAP_AUTO", "true")
+    if use_device_map:
+        model_kwargs["device_map"] = "auto"
+
+    model = LlamaForCausalLM.from_pretrained(model_id, **model_kwargs)
 
     device = os.environ.get("MENTALLAMA_DEVICE", "").strip()
-    if not device:
+    if use_device_map:
+        device = next(model.parameters()).device
+    elif not device:
         if torch.cuda.is_available():
             device = "cuda"
         elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             device = "mps"
         else:
             device = "cpu"
-    model.to(device)
+    if not use_device_map:
+        model.to(device)
     model.eval()
 
     _MENTALLAMA_PIPELINE = tokenizer, model, device
