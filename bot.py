@@ -115,6 +115,8 @@ def _mentallama_load_kwargs() -> dict:
     kwargs = {"cache_dir": cache_dir}
     if _env_flag("MENTALLAMA_LOCAL_FILES_ONLY", "true"):
         kwargs["local_files_only"] = True
+    if not _env_flag("MENTALLAMA_USE_SAFETENSORS", "false"):
+        kwargs["use_safetensors"] = False
     return kwargs
 
 

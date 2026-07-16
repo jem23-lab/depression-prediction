@@ -66,6 +66,7 @@ export HF_HUB_DISABLE_XET="1"
 # Optional MentalLLaMA settings; keep these defaults unless you need to change them
 export MENTALLAMA_MODEL_ID="klyang/MentaLLaMA-chat-7B"
 export MENTALLAMA_DEVICE_MAP_AUTO="true"
+export MENTALLAMA_USE_SAFETENSORS="false"
 export MENTALLAMA_MAX_INPUT_TOKENS="2048"
 export MENTALLAMA_MAX_NEW_TOKENS="1024"
 export MENTALLAMA_DO_SAMPLE="false"
@@ -104,6 +105,7 @@ Optional environment variables:
 | `MENTALLAMA_DEVICE` | auto-detected | Device when `MENTALLAMA_DEVICE_MAP_AUTO=false`, for example `cpu`, `mps`, or `cuda` |
 | `MENTALLAMA_TORCH_DTYPE` | unset | Optional PyTorch dtype name, for example `float16` |
 | `MENTALLAMA_LOCAL_FILES_ONLY` | `true` | Use only already-downloaded model files |
+| `MENTALLAMA_USE_SAFETENSORS` | `false` | Avoid Transformers safetensors auto-conversion for this model |
 | `MENTALLAMA_MAX_INPUT_TOKENS` | `2048` | Max prompt tokens for MentalLLaMA |
 | `MENTALLAMA_MAX_NEW_TOKENS` | `1024` | Max generated tokens for MentalLLaMA |
 | `MENTALLAMA_DO_SAMPLE` | `false` | Enables sampling |
