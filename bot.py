@@ -923,6 +923,17 @@ def _run_planner_answer(paragraph_text: str, question: str) -> tuple:
     return result, result.get("explanation", "No explanation returned.")
 
 
+def _clean_mentallama_answer(answer: str) -> str:
+    answer = (answer or "").strip()
+    answer = re.sub(
+        r"^\s*(?:[?¿]\s*)?(?:reasoning|reason|answer|response)\s*:\s*",
+        "",
+        answer,
+        flags=re.IGNORECASE,
+    ).strip()
+    return answer
+
+
 def _run_mentallama_answer(paragraph_text: str, question: str) -> str:
     tokenizer, model, device = _get_mentallama_pipeline()
     model_input = f"Consider this post: {paragraph_text.strip()} Question: {question.strip()}"
@@ -946,7 +957,7 @@ def _run_mentallama_answer(paragraph_text: str, question: str) -> str:
 
     outputs = model.generate(**inputs, **generation_kwargs)
     generated_tokens = outputs[0][inputs["input_ids"].shape[-1]:]
-    answer = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+    answer = _clean_mentallama_answer(tokenizer.decode(generated_tokens, skip_special_tokens=True))
     return answer or "No response returned."
 
 
