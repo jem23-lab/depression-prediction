@@ -228,6 +228,14 @@ LIKERT_OPTIONS = [
     (5, "Strongly agree"),
 ]
 
+SEVERITY_DISTRIBUTIONS = [
+    {"severe": 3, "moderate": 3, "none": 2},
+    {"severe": 3, "moderate": 2, "none": 3},
+    {"severe": 2, "moderate": 3, "none": 3},
+]
+
+EXPERIMENT_LOG_PATH = os.path.join(_ROOT, "logs", "within_participant_experiment_records.csv")
+
 
 # ── Central message handler ──────────────────────────────────────────
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -315,12 +323,93 @@ def _experiment_rating_prompt(flow: dict) -> str:
 
 
 def _assign_experiment_system(context: ContextTypes.DEFAULT_TYPE, question_id: str) -> str:
-    assignments = context.user_data.setdefault("question_system_assignments", {})
-    if question_id not in assignments:
-        return random.choice(list(EXPERIMENT_SYSTEMS))
+    assignments = context.user_data.get("question_system_assignments") or {}
+    systems_by_block = assignments.get(question_id) or {}
+    block_index = _current_block(context.user_data.get("sample_index", 1))
+    return systems_by_block.get(str(block_index), SYSTEM_AGENTIC_MCP)
 
-    first_system = assignments[question_id]
-    return SYSTEM_MENTALLAMA if first_system == SYSTEM_AGENTIC_MCP else SYSTEM_AGENTIC_MCP
+
+def _normalize_severity(value: str) -> str:
+    raw = (value or "").strip().lower()
+    if "severe" in raw:
+        return "severe"
+    if "moderate" in raw:
+        return "moderate"
+    return "none"
+
+
+def _read_experiment_counts() -> tuple[dict, set]:
+    passage_counts: dict[str, int] = {}
+    sessions: set[str] = set()
+    if not os.path.exists(EXPERIMENT_LOG_PATH):
+        return passage_counts, sessions
+
+    with open(EXPERIMENT_LOG_PATH, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            session_id = row.get("session_id", "")
+            paragraph_id = row.get("paragraph_id", "")
+            if session_id:
+                sessions.add(session_id)
+            if paragraph_id:
+                passage_counts[paragraph_id] = passage_counts.get(paragraph_id, 0) + 1
+    return passage_counts, sessions
+
+
+def _pick_severity_distribution(session_count: int) -> dict:
+    return SEVERITY_DISTRIBUTIONS[session_count % len(SEVERITY_DISTRIBUTIONS)]
+
+
+def _select_passages_for_session() -> list[dict]:
+    passage_counts, sessions = _read_experiment_counts()
+    distribution = _pick_severity_distribution(len(sessions))
+    by_severity: dict[str, list[dict]] = {"severe": [], "moderate": [], "none": []}
+    for paragraph in PARAGRAPHS:
+        by_severity[_normalize_severity(paragraph.get("severity", ""))].append(paragraph)
+
+    selected: list[dict] = []
+    for severity, needed in distribution.items():
+        candidates = by_severity.get(severity, [])[:]
+        random.shuffle(candidates)
+        candidates.sort(key=lambda item: passage_counts.get(item["id"], 0))
+        selected.extend(candidates[:needed])
+
+    if len(selected) < 8:
+        selected_ids = {item["id"] for item in selected}
+        fallback = [item for item in PARAGRAPHS if item["id"] not in selected_ids]
+        random.shuffle(fallback)
+        fallback.sort(key=lambda item: passage_counts.get(item["id"], 0))
+        selected.extend(fallback[:8 - len(selected)])
+
+    random.shuffle(selected)
+    return selected[:8]
+
+
+def _build_question_system_assignments() -> dict:
+    question_ids = [qid for qid, _ in QUESTION_TYPES]
+    block1_systems = [SYSTEM_AGENTIC_MCP, SYSTEM_AGENTIC_MCP, SYSTEM_MENTALLAMA, SYSTEM_MENTALLAMA]
+    random.shuffle(block1_systems)
+    return {
+        qid: {
+            "1": system,
+            "2": SYSTEM_MENTALLAMA if system == SYSTEM_AGENTIC_MCP else SYSTEM_AGENTIC_MCP,
+        }
+        for qid, system in zip(question_ids, block1_systems)
+    }
+
+
+def _allowed_question_ids_for_streak(context: ContextTypes.DEFAULT_TYPE, question_ids: list[str]) -> list[str]:
+    system_history = context.user_data.get("system_history") or []
+    if len(system_history) < 2 or system_history[-1] != system_history[-2]:
+        return question_ids
+
+    assignments = context.user_data.get("question_system_assignments") or {}
+    block_index = str(_current_block(context.user_data.get("sample_index", 1)))
+    required_system = SYSTEM_MENTALLAMA if system_history[-1] == SYSTEM_AGENTIC_MCP else SYSTEM_AGENTIC_MCP
+    allowed = [
+        qid for qid in question_ids
+        if (assignments.get(qid) or {}).get(block_index) == required_system
+    ]
+    return allowed or question_ids
 
 
 def _append_experiment_evaluation(row: dict):
@@ -388,6 +477,11 @@ async def _handle_question_selection(update: Update, context: ContextTypes.DEFAU
         if update.callback_query and update.callback_query.message:
             await update.callback_query.message.reply_text("Please choose one of the currently available questions.")
         return
+    allowed_ids = _allowed_question_ids_for_streak(context, remaining)
+    if question_id not in allowed_ids:
+        if update.callback_query and update.callback_query.message:
+            await update.callback_query.message.reply_text("Please choose one of the currently available questions.")
+        return
 
     remaining.remove(question_id)
     context.user_data["block_remaining_question_ids"] = remaining
@@ -423,7 +517,7 @@ async def _handle_question_selection(update: Update, context: ContextTypes.DEFAU
         )
         return
 
-    context.user_data.setdefault("question_system_assignments", {}).setdefault(question_id, system)
+    context.user_data.setdefault("system_history", []).append(system)
 
     await _pause()
     await _send_message(update, context, _format_box("Explanation", explanation))
@@ -555,13 +649,12 @@ async def _finish_experiment_trial(update: Update, context: ContextTypes.DEFAULT
 
 async def _begin_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    samples = list(PARAGRAPHS)
-    random.shuffle(samples)
-    total = min(8, len(samples))
+    samples = _select_passages_for_session()
     context.user_data.clear()
-    context.user_data["sample_queue"] = samples[:total]
+    context.user_data["sample_queue"] = samples
     context.user_data["sample_index"] = 0
-    context.user_data["question_system_assignments"] = {}
+    context.user_data["question_system_assignments"] = _build_question_system_assignments()
+    context.user_data["system_history"] = []
     context.user_data["session_id"] = f"{user_id}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
 
     await _run_next_sample(update, context)
@@ -671,7 +764,10 @@ async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _pause()
 
     context.user_data["awaiting_question"] = True
-    remaining_ids = list(context.user_data.get("block_remaining_question_ids") or [])
+    remaining_ids = _allowed_question_ids_for_streak(
+        context,
+        list(context.user_data.get("block_remaining_question_ids") or []),
+    )
     displayed_options = [
         {"id": qid, "text": _question_text(qid, sample_number)}
         for qid in remaining_ids
@@ -687,6 +783,7 @@ async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     for item in displayed_options:
         option_lines.append(f"Option {item['position']}: {item['text']}")
+    option_lines.extend(["", "Please select one question:"])
 
     await _send_message(
         update,

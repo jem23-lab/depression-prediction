@@ -127,7 +127,11 @@ The bot is evaluation-first (no menu). When the user sends `/begin`:
    - 5) Four Likert rating statements
 3. Trials are divided into two blocks of four. Each question type is selected once per block.
 4. For each question type, one occurrence is answered by Agentic MCP XAI and the other by MentalLLaMA.
-5. Ratings are stored in `logs/within_participant_experiment_records.csv`.
+5. Passage allocation rotates across severity mixes: 3 severe/3 moderate/2 non-depressive,
+   3 severe/2 moderate/3 non-depressive, then 2 severe/3 moderate/3 non-depressive.
+6. Passage selection prefers passages that have appeared less often in prior logged sessions.
+7. Question/system assignment prevents more than two consecutive trials from the same system.
+8. Ratings are stored in `logs/within_participant_experiment_records.csv`.
 
 The MentalLLaMA response uses `klyang/MentaLLaMA-chat-7B` through Hugging Face
 Transformers. The model receives only the participant text and question in the
