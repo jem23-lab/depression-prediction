@@ -301,6 +301,9 @@ Use the evidence according to the planner's intent:
 
 Rules:
 - Use only the evidence above; do not add outside facts, advice, diagnosis, or reassurance.
+- Use meaningful phrases or content words when explaining word-level evidence. Do not treat
+  generic words like "feel", "currently", "could", "couldn't", "thing", or "very" as
+  important by themselves.
 - Do not mention SHAP, RAG, counterfactual, planner, tools, scores, or confidence.
 - Directly answer the participant's question and keep it understandable for a non-technical user.
 - Prefer one or two short paragraphs, not bullet points.

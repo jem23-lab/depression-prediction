@@ -273,7 +273,18 @@ class SHAPResult:
 
 _SHAP_EXPLAINER = None
 _SHAP_MASKER = None
-_GENERIC_TOKENS = {"things", "stuff", "something", "anything", "everything", "really", "very"}
+_LOW_CONTEXT_TOKENS = {
+    "a", "an", "and", "are", "as", "at", "be", "been", "being", "but", "by",
+    "can", "cant", "can't", "cannot", "could", "couldn", "couldnt", "couldn't",
+    "did", "didnt", "didn't", "do", "does", "doesnt", "doesn't", "doing",
+    "don", "dont", "don't", "every", "feel", "feeling", "felt", "for",
+    "from", "get", "go", "had", "has", "have", "having", "i", "im", "i'm",
+    "in", "is", "it", "its", "it's", "just", "kind", "like", "lot", "make",
+    "makes", "me", "my", "of", "on", "or", "really", "seem", "seems", "so",
+    "something", "stuff", "that", "the", "then", "things", "this", "to",
+    "t", "very", "was", "were", "with", "would", "wouldn", "you",
+    "currently", "today", "now", "lately", "recently",
+}
 
 
 def _get_shap_explainer():
@@ -369,6 +380,32 @@ def _resolve_display_token(token: str, text: str) -> str:
     return token
 
 
+def _contextual_display_token(token: str, text: str) -> str:
+    if not text or " " in token or not _is_meaningful_display_token(token):
+        return token
+
+    pattern = re.compile(r"\b" + re.escape(token) + r"\b", re.IGNORECASE)
+    match = pattern.search(text)
+    if not match:
+        return token
+
+    left_text = text[:match.start()]
+    right_text = text[match.end():]
+    left_words = re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", left_text)[-2:]
+    right_words = re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", right_text)[:3]
+
+    phrase_words = [text[match.start():match.end()]]
+    if right_words and right_words[0].lower() in {"about", "after", "because", "from", "over", "with", "without"}:
+        phrase_words.extend(right_words)
+    elif left_words and left_words[-1].lower() in {"avoid", "avoided", "avoiding", "keep", "kept", "staying"}:
+        phrase_words = [left_words[-1]] + phrase_words
+
+    phrase = " ".join(phrase_words).strip()
+    if phrase and phrase.lower() != token.lower() and _is_meaningful_display_token(phrase):
+        return phrase
+    return token
+
+
 def _aggregate_records(records: List[dict]) -> List[dict]:
     merged = {}
     for rec in records:
@@ -398,9 +435,35 @@ def _rank_records(records: List[dict]) -> List[dict]:
     )
 
 
-def _filter_generic(records: List[dict]) -> List[dict]:
-    filtered = [r for r in records if r["token"].lower() not in _GENERIC_TOKENS]
-    return filtered or records
+def _token_terms(token: str) -> List[str]:
+    return re.findall(r"[a-z]+(?:['’][a-z]+)?", token.lower())
+
+
+def _is_meaningful_display_token(token: str) -> bool:
+    terms = _token_terms(token)
+    if not terms:
+        return False
+
+    meaningful_terms = [
+        term for term in terms
+        if term not in _LOW_CONTEXT_TOKENS and term.replace("'", "").replace("’", "") not in _LOW_CONTEXT_TOKENS
+    ]
+    if " " in token:
+        return bool(meaningful_terms)
+    return bool(meaningful_terms) and len(meaningful_terms[0]) >= 3
+
+
+def _filter_display_records(records: List[dict]) -> List[dict]:
+    if not records:
+        return records
+
+    strongest = max(float(r["abs_shap"]) for r in records)
+    min_abs = strongest * 0.20
+    filtered = [
+        r for r in records
+        if _is_meaningful_display_token(r["token"]) and float(r["abs_shap"]) >= min_abs
+    ]
+    return filtered or [r for r in records if _is_meaningful_display_token(r["token"])] or records[:3]
 
 
 def explain_with_shap(text: str, top_n: int = 8) -> SHAPResult:
@@ -421,7 +484,7 @@ def explain_with_shap(text: str, top_n: int = 8) -> SHAPResult:
         clean = tok.strip()
         if not clean:
             continue
-        display = _resolve_display_token(clean, text)
+        display = _contextual_display_token(_resolve_display_token(clean, text), text)
         records.append({
             "token": display,
             "shap": float(sv),
@@ -430,7 +493,7 @@ def explain_with_shap(text: str, top_n: int = 8) -> SHAPResult:
             "note": "",
         })
     records = _aggregate_records(records)
-    records = _filter_generic(_rank_records(records))
+    records = _filter_display_records(_rank_records(records))
 
     return SHAPResult(
         text=text,

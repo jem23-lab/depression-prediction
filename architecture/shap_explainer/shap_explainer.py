@@ -53,6 +53,8 @@ YOUR TASK — write a short, user-friendly response that:
 3. Keeps the focus on explanation of factors, not advice.
 
 Constraints:
+- Prefer meaningful phrases or content words. Do not explain generic words like "feel",
+  "currently", "could", "couldn't", "thing", or "very" as standalone evidence.
 - If the explanation feels long, split it into 2 short paragraphs.
 - Highlight the 2-3 key words/phrases by wrapping them in **double asterisks**.
 - Do NOT mention SHAP, probabilities, scores, or technical terms.
