@@ -269,10 +269,50 @@ PREFERENCE_OPTIONS = [
 
 BASELINE_METHODS = ["SHAP", "RAG", "HYBRID", "COUNTERFACTUAL"]
 
+QUESTION_TYPES = [
+    (
+        "parts",
+        "Which parts of Text Sample (Person {person}) contributed most to this prediction?",
+    ),
+    (
+        "change",
+        "What would need to be different in Text Sample (Person {person}) for the prediction to change?",
+    ),
+    (
+        "symptoms",
+        "Which symptoms or behaviours described in Text Sample (Person {person}) could have led to this prediction?",
+    ),
+    (
+        "findings",
+        "What are the main findings and pieces of evidence in Text Sample (Person {person}) that led to this result?",
+    ),
+]
+
+SYSTEM_AGENTIC_MCP = "Agentic MCP XAI"
+SYSTEM_MENTALLAMA = "MentalLLaMA"
+EXPERIMENT_SYSTEMS = (SYSTEM_AGENTIC_MCP, SYSTEM_MENTALLAMA)
+
+EXPERIMENT_RATING_STATEMENTS = [
+    ("answered", "The explanation directly answered the question."),
+    ("supported", "The explanation was supported by details in the text sample and was consistent with the displayed prediction."),
+    ("understandable", "The explanation was easy to understand."),
+    ("confidence", "The explanation gave me an appropriate level of confidence in the prediction."),
+]
+
+LIKERT_OPTIONS = [
+    (1, "Strongly disagree"),
+    (2, "Disagree"),
+    (3, "Neither agree nor disagree"),
+    (4, "Agree"),
+    (5, "Strongly agree"),
+]
+
 
 # ── Central message handler ──────────────────────────────────────────
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
+        if await _handle_experiment_callback(update, context):
+            return
         if await _handle_pairwise_callback(update, context):
             return
         if await _handle_rating(update, context):
@@ -295,7 +335,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if context.user_data.get("awaiting_question"):
-        await _handle_participant_question(update, context, text)
+        await update.message.reply_text("Please choose one of the question buttons above.")
         return
 
     if context.user_data.get("pairwise_flow"):
@@ -409,6 +449,298 @@ def _append_interactive_evaluation(row: dict):
         data = {key: row.get(key, "") for key in fieldnames}
         data["timestamp_utc"] = data["timestamp_utc"] or datetime.now(timezone.utc).isoformat()
         writer.writerow(data)
+
+
+def _question_by_id(question_id: str):
+    for qid, template in QUESTION_TYPES:
+        if qid == question_id:
+            return qid, template
+    return QUESTION_TYPES[0]
+
+
+def _question_text(question_id: str, person: int) -> str:
+    _, template = _question_by_id(question_id)
+    return template.format(person=person)
+
+
+def _current_block(sample_index: int) -> int:
+    return 1 if sample_index <= 4 else 2
+
+
+def _question_choice_keyboard(displayed_options: list[dict]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"Option {item['position']}", callback_data=f"qsel:{item['id']}")]
+        for item in displayed_options
+    ])
+
+
+def _likert_keyboard(step: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(label, callback_data=f"exp_rate:{step}:{score}")]
+        for score, label in LIKERT_OPTIONS
+    ])
+
+
+def _experiment_rating_prompt(flow: dict) -> str:
+    step = flow["step"]
+    ratings = flow["ratings"]
+    if step >= len(EXPERIMENT_RATING_STATEMENTS):
+        lines = [
+            f"- {label}: {ratings.get(key)}"
+            for key, label in EXPERIMENT_RATING_STATEMENTS
+        ]
+        return _format_box("Rate This Explanation", "\n".join(lines))
+
+    _, statement = EXPERIMENT_RATING_STATEMENTS[step]
+    return _format_box(
+        "Rate This Explanation",
+        _join_box_lines([
+            f"Statement {step + 1} of {len(EXPERIMENT_RATING_STATEMENTS)}",
+            "",
+            statement,
+            "",
+            "Choose one response.",
+        ]),
+    )
+
+
+def _assign_experiment_system(context: ContextTypes.DEFAULT_TYPE, question_id: str) -> str:
+    assignments = context.user_data.setdefault("question_system_assignments", {})
+    if question_id not in assignments:
+        return random.choice(list(EXPERIMENT_SYSTEMS))
+
+    first_system = assignments[question_id]
+    return SYSTEM_MENTALLAMA if first_system == SYSTEM_AGENTIC_MCP else SYSTEM_AGENTIC_MCP
+
+
+def _append_experiment_evaluation(row: dict):
+    csv_path = os.path.join(_ROOT, "logs", "within_participant_experiment_records.csv")
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    fieldnames = [
+        "timestamp_utc",
+        "user_id",
+        "session_id",
+        "block_index",
+        "trial_index",
+        "paragraph_id",
+        "paragraph_text",
+        "prediction_label",
+        "prediction_confidence",
+        "question_id",
+        "question_text",
+        "explanation_system",
+        "explanation_text",
+        "rating_answered",
+        "rating_supported",
+        "rating_understandable",
+        "rating_confidence",
+    ]
+
+    write_header = not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        data = {key: row.get(key, "") for key in fieldnames}
+        data["timestamp_utc"] = data["timestamp_utc"] or datetime.now(timezone.utc).isoformat()
+        writer.writerow(data)
+
+
+async def _handle_experiment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    query = update.callback_query
+    if query is None:
+        return False
+
+    raw = (query.data or "").strip()
+    if raw.startswith("qsel:"):
+        await query.answer()
+        await _handle_question_selection(update, context, raw.split(":", 1)[1])
+        return True
+
+    if raw.startswith("exp_rate:"):
+        await query.answer()
+        await _handle_experiment_rating(update, context, raw)
+        return True
+
+    return False
+
+
+async def _handle_question_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, question_id: str):
+    if not context.user_data.get("awaiting_question"):
+        if update.callback_query and update.callback_query.message:
+            await update.callback_query.message.reply_text("This question selection is no longer active.")
+        return
+
+    sample_number = context.user_data.get("sample_index", 1)
+    block_index = _current_block(sample_number)
+    remaining = context.user_data.get("block_remaining_question_ids") or []
+    if question_id not in remaining:
+        if update.callback_query and update.callback_query.message:
+            await update.callback_query.message.reply_text("Please choose one of the currently available questions.")
+        return
+
+    remaining.remove(question_id)
+    context.user_data["block_remaining_question_ids"] = remaining
+    context.user_data["awaiting_question"] = False
+
+    paragraph_id = context.user_data.get("current_paragraph_id", "")
+    paragraph_text = context.user_data.get("current_paragraph_text", "")
+    label = context.user_data.get("current_prediction_label", "unknown")
+    conf = context.user_data.get("current_prediction_confidence", 0.0)
+    question = _question_text(question_id, sample_number)
+    system = _assign_experiment_system(context, question_id)
+
+    await _send_message(update, context, _format_box("Selected Question", question))
+    await _send_message(update, context, _format_box("Generating Explanation", "Please wait while the response is generated."))
+
+    try:
+        if system == SYSTEM_AGENTIC_MCP:
+            _, explanation = _run_planner_answer(paragraph_text, question)
+        else:
+            explanation = _run_mentallama_answer(paragraph_text, question)
+    except Exception as exc:
+        logger.exception("Failed to generate %s explanation: %s", system, exc)
+        if question_id not in context.user_data.get("block_remaining_question_ids", []):
+            context.user_data.setdefault("block_remaining_question_ids", []).append(question_id)
+        context.user_data["awaiting_question"] = True
+        await _send_message(
+            update,
+            context,
+            _format_box(
+                "Generation Failed",
+                "Something went wrong while generating the explanation. Please choose a question again.",
+            ),
+        )
+        return
+
+    context.user_data.setdefault("question_system_assignments", {}).setdefault(question_id, system)
+
+    await _pause()
+    await _send_message(update, context, _format_box("Explanation", explanation))
+    await _pause()
+
+    context.user_data["experiment_rating_flow"] = {
+        "session_id": context.user_data.get("session_id"),
+        "block_index": block_index,
+        "trial_index": sample_number,
+        "paragraph_id": paragraph_id,
+        "paragraph_text": paragraph_text,
+        "prediction_label": label,
+        "prediction_confidence": conf,
+        "question_id": question_id,
+        "question_text": question,
+        "explanation_system": system,
+        "explanation_text": explanation,
+        "ratings": {key: None for key, _ in EXPERIMENT_RATING_STATEMENTS},
+        "step": 0,
+        "prompt_message_id": None,
+    }
+
+    sent = await _send_message(
+        update,
+        context,
+        _experiment_rating_prompt(context.user_data["experiment_rating_flow"]),
+        reply_markup=_likert_keyboard(0),
+    )
+    if sent is not None:
+        context.user_data["experiment_rating_flow"]["prompt_message_id"] = sent.message_id
+
+
+async def _handle_experiment_rating(update: Update, context: ContextTypes.DEFAULT_TYPE, raw: str):
+    flow = context.user_data.get("experiment_rating_flow")
+    if not flow:
+        if update.callback_query and update.callback_query.message:
+            await update.callback_query.message.reply_text("This rating question is no longer active.")
+        return
+
+    parts = raw.split(":", 2)
+    if len(parts) != 3:
+        return
+
+    try:
+        step = int(parts[1])
+        score = int(parts[2])
+    except ValueError:
+        return
+
+    if step != flow.get("step", 0):
+        if update.callback_query and update.callback_query.message:
+            await update.callback_query.message.reply_text("Please answer the current rating statement.")
+        return
+
+    if score < 1 or score > 5:
+        return
+
+    criterion_key, _ = EXPERIMENT_RATING_STATEMENTS[step]
+    flow["ratings"][criterion_key] = score
+    flow["step"] = step + 1
+
+    reply_message = update.callback_query.message if update.callback_query else None
+    if reply_message is None:
+        return
+
+    prompt = _experiment_rating_prompt(flow)
+    reply_markup = _likert_keyboard(flow["step"]) if flow["step"] < len(EXPERIMENT_RATING_STATEMENTS) else None
+    try:
+        await context.bot.edit_message_text(
+            chat_id=update.effective_chat.id,
+            message_id=flow["prompt_message_id"],
+            text=prompt,
+            reply_markup=reply_markup,
+        )
+    except Exception:
+        sent = await reply_message.reply_text(prompt, reply_markup=reply_markup)
+        flow["prompt_message_id"] = sent.message_id
+
+    if flow["step"] < len(EXPERIMENT_RATING_STATEMENTS):
+        return
+
+    await _finish_experiment_trial(update, context)
+
+
+async def _finish_experiment_trial(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    flow = context.user_data.get("experiment_rating_flow")
+    if not flow:
+        return
+
+    ratings = flow["ratings"]
+    _append_experiment_evaluation({
+        "user_id": str(update.effective_user.id),
+        "session_id": flow["session_id"],
+        "block_index": flow["block_index"],
+        "trial_index": flow["trial_index"],
+        "paragraph_id": flow["paragraph_id"],
+        "paragraph_text": flow["paragraph_text"],
+        "prediction_label": flow["prediction_label"],
+        "prediction_confidence": flow["prediction_confidence"],
+        "question_id": flow["question_id"],
+        "question_text": flow["question_text"],
+        "explanation_system": flow["explanation_system"],
+        "explanation_text": flow["explanation_text"],
+        "rating_answered": ratings.get("answered", ""),
+        "rating_supported": ratings.get("supported", ""),
+        "rating_understandable": ratings.get("understandable", ""),
+        "rating_confidence": ratings.get("confidence", ""),
+    })
+
+    context.user_data.pop("experiment_rating_flow", None)
+    for key in [
+        "current_paragraph_id",
+        "current_paragraph_text",
+        "current_paragraph_severity",
+        "current_prediction_label",
+        "current_prediction_confidence",
+        "current_question_options",
+    ]:
+        context.user_data.pop(key, None)
+
+    if context.user_data.get("sample_queue"):
+        await _send_message(update, context, _format_box("Trial Complete", "Moving to the next text sample."))
+        await _pause()
+        await _run_next_sample(update, context)
+        return
+
+    await _send_message(update, context, _format_box("Study complete. Thank you for participating."))
 
 
 async def _send_pairwise_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -810,11 +1142,11 @@ async def _begin_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     samples = list(PARAGRAPHS)
     random.shuffle(samples)
-    total = min(5, len(samples))
+    total = min(8, len(samples))
     context.user_data.clear()
     context.user_data["sample_queue"] = samples[:total]
     context.user_data["sample_index"] = 0
-    context.user_data["question_index"] = 0
+    context.user_data["question_system_assignments"] = {}
     context.user_data["session_id"] = f"{user_id}_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
 
     await _run_next_sample(update, context)
@@ -970,6 +1302,12 @@ async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
     selected_paragraph = queue.pop(0)
     context.user_data["sample_queue"] = queue
     context.user_data["sample_index"] = context.user_data.get("sample_index", 0) + 1
+    sample_number = context.user_data.get("sample_index", 1)
+    block_index = _current_block(sample_number)
+
+    if context.user_data.get("current_block_index") != block_index:
+        context.user_data["current_block_index"] = block_index
+        context.user_data["block_remaining_question_ids"] = [qid for qid, _ in QUESTION_TYPES]
 
     paragraph_id = selected_paragraph["id"]
     paragraph_text = selected_paragraph["text"]
@@ -983,12 +1321,11 @@ async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["current_prediction_label"] = label
     context.user_data["current_prediction_confidence"] = conf
 
-    sample_number = context.user_data.get("sample_index", 1)
     await _send_message(
         update,
         context,
         _format_box(
-            _format_title("📝 Text Sample (Person", f"{sample_number})"),
+            _format_title("Text Sample — Person", str(sample_number)),
             _format_for_display(paragraph_text),
         ),
     )
@@ -999,21 +1336,35 @@ async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if label == "not depression" else
         f"Person {sample_number} shows signs of {label} depression."
     )
-    await _send_message(update, context, _format_box("🤖Prediction", label_sentence))
+    await _send_message(update, context, _format_box("Prediction", label_sentence))
     await _pause()
 
     context.user_data["awaiting_question"] = True
+    remaining_ids = list(context.user_data.get("block_remaining_question_ids") or [])
+    displayed_options = [
+        {"id": qid, "text": _question_text(qid, sample_number)}
+        for qid in remaining_ids
+    ]
+    random.shuffle(displayed_options)
+    for pos, item in enumerate(displayed_options, 1):
+        item["position"] = pos
+    context.user_data["current_question_options"] = displayed_options
+
+    option_lines = [
+        "What would you most like to understand about this prediction?",
+        "",
+    ]
+    for item in displayed_options:
+        option_lines.append(f"Option {item['position']}: {item['text']}")
+
     await _send_message(
         update,
         context,
         _format_box(
-            f"Ask a Question About Person {sample_number}",
-            "You can ask anything about the prediction, for example:\n"
-            "- Why was this prediction made?\n"
-            "- Which words mattered?\n"
-            "- How could the prediction change?\n"
-            "- Why is this not a different severity level?",
+            f"Question Selection — Block {block_index}",
+            "\n".join(option_lines),
         ),
+        reply_markup=_question_choice_keyboard(displayed_options),
     )
 
 

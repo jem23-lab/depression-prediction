@@ -24,7 +24,7 @@ explainableDepressionPrediction_mcp_server/
 │   └── phq8_knowledge_base.csv     ← PHQ-8 symptom knowledge base (RAG source)
 │
 └── logs/
-    └── evaluation_records.csv
+    └── within_participant_experiment_records.csv
 ```
 
 ## What is shared vs what is use-case specific
@@ -118,14 +118,16 @@ python scripts/run_simple_model_demo.py
 
 The bot is evaluation-first (no menu). When the user sends `/begin`:
 
-1. Bot selects 10 participant paragraphs (DAIC-WOZ style).
+1. Bot selects 8 participant paragraphs (DAIC-WOZ style).
 2. For each sample, it shows:
    - 1) Text Sample
    - 2) Prediction
-   - 3) Participant question prompt
-   - 4) Two anonymous responses: Planner (MCP) and MentalLLaMA
-   - 5) Pairwise comparison prompts
-3. Pairwise ratings are stored in `logs/interactive_evaluation_records.csv`.
+   - 3) A randomized set of available fixed question options
+   - 4) One explanation from either Agentic MCP XAI or MentalLLaMA
+   - 5) Four Likert rating statements
+3. Trials are divided into two blocks of four. Each question type is selected once per block.
+4. For each question type, one occurrence is answered by Agentic MCP XAI and the other by MentalLLaMA.
+5. Ratings are stored in `logs/within_participant_experiment_records.csv`.
 
 The MentalLLaMA response uses `klyang/MentaLLaMA-chat-7B` through Hugging Face
 Transformers. The model receives only the participant text and question in the
@@ -147,26 +149,30 @@ Explanations are factor-only and user-friendly:
 ## Evaluation flow
 
 1. User sends `/begin`.
-2. Bot shows each text sample, prediction, and two explanations.
-3. Bot sends a single editable Evaluation box for ratings (buttons 1–5).
-4. The Evaluation box updates after each score entry.
-5. Results are appended to `logs/evaluation_records.csv`.
+2. Bot shows each text sample and prediction.
+3. Bot asks the participant to choose one available fixed question.
+4. Bot secretly assigns the selected question to Agentic MCP XAI or MentalLLaMA.
+5. Bot shows one explanation and collects four Likert ratings.
+6. Results are appended to `logs/within_participant_experiment_records.csv`.
 
 Saved CSV columns:
 - `timestamp_utc`
 - `user_id`
 - `session_id`
+- `block_index`
+- `trial_index`
 - `paragraph_id`
 - `paragraph_text`
-- `selected_use_case`
-- `selected_use_case_name`
 - `prediction_label`
 - `prediction_confidence`
+- `question_id`
+- `question_text`
+- `explanation_system`
 - `explanation_text`
-- `rating_clarity`
-- `rating_correctness`
-- `rating_helpfulness`
-- `rating_overall_avg`
+- `rating_answered`
+- `rating_supported`
+- `rating_understandable`
+- `rating_confidence`
 
 ## Cache explanations
 
