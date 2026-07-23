@@ -543,8 +543,11 @@ async def _handle_question_selection(update: Update, context: ContextTypes.DEFAU
     try:
         saved = _get_saved_study_response(paragraph_id, question_id, system)
         explanation = saved["entry"]["response"]
-        response_record_id = saved["entry"].get("response_record_id", "")
         response_text_hash = saved["entry"].get("response_hash") or stable_text_hash(explanation)
+        response_record_id = saved["entry"].get(
+            "response_record_id",
+            f"{paragraph_id}:{question_id}:{system}:{response_text_hash[:12]}",
+        )
         response_retrieval_status = "success"
     except StudyResponseNotFoundError as exc:
         logger.exception("Missing saved study response: %s", exc)

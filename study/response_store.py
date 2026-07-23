@@ -40,7 +40,7 @@ def atomic_write_json(path: str, payload: dict) -> None:
         os.makedirs(parent, exist_ok=True)
     tmp_path = f"{path}.tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False, sort_keys=True)
+        json.dump(payload, f, indent=2, ensure_ascii=False)
         f.write("\n")
     os.replace(tmp_path, path)
 
@@ -49,7 +49,7 @@ def empty_payload() -> dict:
     return {
         "schema_version": SCHEMA_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "questions": deepcopy(QUESTION_TEXTS),
+        "question_catalog": deepcopy(QUESTION_TEXTS),
         "records": [],
     }
 
@@ -61,7 +61,8 @@ def load_payload(path: str) -> dict:
         payload = json.load(f)
     payload.setdefault("schema_version", SCHEMA_VERSION)
     payload.setdefault("created_at", datetime.now(timezone.utc).isoformat())
-    payload.setdefault("questions", deepcopy(QUESTION_TEXTS))
+    if "question_catalog" not in payload:
+        payload["question_catalog"] = payload.pop("questions", deepcopy(QUESTION_TEXTS))
     payload.setdefault("records", [])
     return payload
 
@@ -77,13 +78,17 @@ class StudyResponseStore:
     def _build_index(self) -> None:
         self._records_by_passage.clear()
         self._index.clear()
+        question_type_by_text = {
+            text: question_type
+            for question_type, text in (self.payload.get("question_catalog") or QUESTION_TEXTS).items()
+        }
         for record in self.payload.get("records", []):
             passage_id = record.get("id")
             if not passage_id:
                 continue
             self._records_by_passage[passage_id] = record
-            for question in record.get("questions", []):
-                question_type = question.get("type")
+            for question in record.get("responses", record.get("questions", [])):
+                question_type = question.get("type") or question_type_by_text.get(question.get("question"))
                 if not question_type:
                     continue
                 for system in SYSTEMS:

@@ -1,11 +1,11 @@
 {
+  "schema_version": "1.0",
   "created_at": "2026-07-23T00:00:00+00:00",
-  "questions": {
+  "question_catalog": {
+    "shap": "Which text parts mattered most?",
     "counterfactual": "What could change the prediction?",
-    "hybrid": "What evidence supports it?",
     "rag": "Which symptoms mattered?",
-    "shap": "Which text parts mattered most?"
+    "hybrid": "What evidence supports it?"
   },
-  "records": [],
-  "schema_version": "1.0"
+  "records": []
 }

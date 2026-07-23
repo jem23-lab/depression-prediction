@@ -31,7 +31,6 @@ from study.response_store import (
     atomic_write_json,
     empty_payload,
     load_payload,
-    stable_text_hash,
 )
 
 
@@ -173,47 +172,57 @@ def _record_for_passage(payload: dict, passage: dict) -> dict:
     passage_id = passage["id"]
     for record in payload["records"]:
         if record.get("id") == passage_id:
-            record.setdefault("questions", [])
+            if "prediction" not in record:
+                record["prediction"] = {
+                    "label": record.pop("prediction_label", ""),
+                    "confidence": record.pop("prediction_confidence", None),
+                }
+            if "responses" not in record:
+                record["responses"] = record.pop("questions", [])
             return record
 
     label, conf = _prediction_from_text(passage_id, passage.get("text") or "")
     record = {
         "id": passage_id,
-        "severity": passage.get("severity", ""),
         "text": passage.get("text") or "",
-        "prediction_confidence": conf,
-        "prediction_label": label,
-        "questions": [],
+        "severity": passage.get("severity", ""),
+        "prediction": {
+            "label": label,
+            "confidence": conf,
+        },
+        "responses": [],
     }
     payload["records"].append(record)
     return record
 
 
 def _question_entry(record: dict, question_type: str) -> dict:
-    for entry in record["questions"]:
-        if entry.get("type") == question_type:
+    question_text = QUESTION_TEXTS[question_type]
+    record.setdefault("responses", record.pop("questions", []))
+    for entry in record["responses"]:
+        if entry.get("question") == question_text or entry.get("type") == question_type:
+            entry.pop("type", None)
+            entry["question"] = question_text
+            entry.setdefault(SYSTEM_AGENTIC_XAI, {"status": "missing", "response": None})
+            entry.setdefault(SYSTEM_MENTALLAMA, {"status": "missing", "response": None})
             return entry
     entry = {
-        "type": question_type,
-        "question_text": QUESTION_TEXTS[question_type],
-        "agentic_xai_selected_tool": AGENTIC_TOOL_BY_QUESTION[question_type],
-        "agentic_xai_tool_explanation": "",
-        "mentallama_explanation": "",
-        SYSTEM_AGENTIC_XAI: {},
-        SYSTEM_MENTALLAMA: {},
+        "question": question_text,
+        SYSTEM_AGENTIC_XAI: {
+            "status": "missing",
+            "response": None,
+        },
+        SYSTEM_MENTALLAMA: {
+            "status": "missing",
+            "response": None,
+        },
     }
-    record["questions"].append(entry)
+    record["responses"].append(entry)
     return entry
 
 
 def _system_entry(question_entry: dict, system: str) -> dict:
-    entry = question_entry.setdefault(system, {})
-    if entry.get("status") == "success":
-        if system == SYSTEM_AGENTIC_XAI:
-            question_entry["agentic_xai_tool_explanation"] = entry.get("response", "")
-        if system == SYSTEM_MENTALLAMA:
-            question_entry["mentallama_explanation"] = entry.get("response", "")
-    return entry
+    return question_entry.setdefault(system, {"status": "missing", "response": None})
 
 
 def _is_done(entry: dict) -> bool:
@@ -230,34 +239,27 @@ def _should_generate(entry: dict, overwrite: bool, retry_failed: bool) -> bool:
     return True
 
 
-def _save_success(question_entry: dict, system: str, response: str, metadata: dict[str, Any]) -> None:
-    response_hash = stable_text_hash(response)
+def _save_success(question_entry: dict, system: str, response: str, question_type: str) -> None:
     entry = {
         "status": "success",
         "response": response,
-        "response_hash": response_hash,
-        "response_record_id": f"{metadata['passage_id']}:{metadata['question_type']}:{system}:{response_hash[:12]}",
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "metadata": metadata,
     }
-    question_entry[system] = entry
     if system == SYSTEM_AGENTIC_XAI:
-        question_entry["agentic_xai_tool_explanation"] = response
-    elif system == SYSTEM_MENTALLAMA:
-        question_entry["mentallama_explanation"] = response
+        entry["selected_tool"] = AGENTIC_TOOL_BY_QUESTION[question_type]
+    question_entry[system] = entry
 
 
-def _save_error(question_entry: dict, system: str, exc: Exception, metadata: dict[str, Any]) -> None:
+def _save_error(question_entry: dict, system: str, exc: Exception) -> None:
     question_entry[system] = {
         "status": "error",
-        "response": "",
+        "response": None,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "error": {
             "type": exc.__class__.__name__,
             "message": str(exc),
             "traceback": traceback.format_exc(),
         },
-        "metadata": metadata,
     }
 
 
@@ -298,7 +300,8 @@ def main() -> None:
 
     payload = load_payload(args.output) if os.path.exists(args.output) else empty_payload()
     payload["schema_version"] = SCHEMA_VERSION
-    payload["questions"] = deepcopy(QUESTION_TEXTS)
+    payload["question_catalog"] = deepcopy(QUESTION_TEXTS)
+    payload.pop("questions", None)
     payload.setdefault("records", [])
 
     total = len(passages) * len(args.question_types) * len(args.systems)
@@ -329,21 +332,13 @@ def main() -> None:
                     print(f"{label} | skipped")
                     continue
 
-                metadata = {
-                    "passage_id": passage["id"],
-                    "question_type": question_type,
-                    "question_text": question_text,
-                    "system": system,
-                    "schema_version": SCHEMA_VERSION,
-                }
                 try:
-                    response, extra_metadata = _generate_one(system, passage, question_type, question_text)
-                    metadata.update(extra_metadata)
-                    _save_success(question_entry, system, response, metadata)
+                    response, _ = _generate_one(system, passage, question_type, question_text)
+                    _save_success(question_entry, system, response, question_type)
                     success += 1
                     print(f"{label} | success")
                 except Exception as exc:
-                    _save_error(question_entry, system, exc, metadata)
+                    _save_error(question_entry, system, exc)
                     errors += 1
                     logger.exception("%s failed: %s", label, exc)
                     print(f"{label} | error: {exc}")

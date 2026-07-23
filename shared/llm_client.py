@@ -21,7 +21,7 @@ logger = logging.getLogger("llm_client")
 # VLLM_MODEL = os.environ.get("VLLM_MODEL", "openai/gpt-oss-20b")
 
 GEMINI_MODELS = [
-    "gemini-3-flash-preview"
+    "gemini-3.5-flash-lite"
 ]
 
 def call_gemini(prompt: str, system: str = "") -> str:
