@@ -209,6 +209,13 @@ QUESTION_TYPES = [
     ),
 ]
 
+QUESTION_BUTTON_LABELS = {
+    "parts": "Which text parts mattered most?",
+    "change": "What could change the prediction?",
+    "symptoms": "Which symptoms mattered?",
+    "findings": "What evidence supports it?",
+}
+
 SYSTEM_AGENTIC_MCP = "Agentic MCP XAI"
 SYSTEM_MENTALLAMA = "MentalLLaMA"
 EXPERIMENT_SYSTEMS = (SYSTEM_AGENTIC_MCP, SYSTEM_MENTALLAMA)
@@ -281,13 +288,17 @@ def _question_text(question_id: str, person: int) -> str:
     return template.format(person=person)
 
 
+def _question_button_label(question_id: str) -> str:
+    return QUESTION_BUTTON_LABELS.get(question_id, question_id.replace("_", " ").title())
+
+
 def _current_block(sample_index: int) -> int:
     return 1 if sample_index <= 4 else 2
 
 
 def _question_choice_keyboard(displayed_options: list[dict]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"Option {item['position']}", callback_data=f"qsel:{item['id']}")]
+        [InlineKeyboardButton(item["button_label"], callback_data=f"qsel:{item['id']}")]
         for item in displayed_options
     ])
 
@@ -494,8 +505,8 @@ async def _handle_question_selection(update: Update, context: ContextTypes.DEFAU
     question = _question_text(question_id, sample_number)
     system = _assign_experiment_system(context, question_id)
 
-    await _send_message(update, context, _format_box("Selected Question", question))
-    await _send_message(update, context, _format_box("Generating Explanation", "Please wait while the response is generated."))
+    await _send_message(update, context, f"Selected: {_question_button_label(question_id)}")
+    await _send_message(update, context, "Generating explanation...")
 
     try:
         if system == SYSTEM_AGENTIC_MCP:
@@ -769,29 +780,20 @@ async def _run_next_sample(update: Update, context: ContextTypes.DEFAULT_TYPE):
         list(context.user_data.get("block_remaining_question_ids") or []),
     )
     displayed_options = [
-        {"id": qid, "text": _question_text(qid, sample_number)}
+        {
+            "id": qid,
+            "text": _question_text(qid, sample_number),
+            "button_label": _question_button_label(qid),
+        }
         for qid in remaining_ids
     ]
     random.shuffle(displayed_options)
-    for pos, item in enumerate(displayed_options, 1):
-        item["position"] = pos
     context.user_data["current_question_options"] = displayed_options
-
-    option_lines = [
-        "What would you most like to understand about this prediction?",
-        "",
-    ]
-    for item in displayed_options:
-        option_lines.append(f"Option {item['position']}: {item['text']}")
-    option_lines.extend(["", "Please select one question:"])
 
     await _send_message(
         update,
         context,
-        _format_box(
-            f"Question Selection — Block {block_index}",
-            "\n".join(option_lines),
-        ),
+        "Please select one question from below:",
         reply_markup=_question_choice_keyboard(displayed_options),
     )
 
