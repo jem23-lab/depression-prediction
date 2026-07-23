@@ -357,3 +357,67 @@ def run_mcp_pipeline(
         "rationale": plan.get("rationale", ""),
         "errors": errors,
     }
+
+
+def run_fixed_tool_pipeline(
+    user_text: str,
+    question_type: str,
+    user_question: str,
+    fallback: bool = True,
+) -> Dict[str, Any]:
+    """
+    Controlled study generation path.
+
+    This bypasses the planner and runs the fixed explanation tool assigned to
+    the question type. It still uses the MCP response generator to turn the
+    collected evidence into the same user-facing explanation style.
+    """
+    aliases = {
+        "shap": "shap",
+        "rag": "rag",
+        "counterfactual": "counterfactual",
+        "hybrid": "hybrid",
+    }
+    selected_tool = aliases.get(str(question_type).strip().lower())
+    if selected_tool not in VALID_TOOLS:
+        raise ValueError(f"Unsupported fixed question_type={question_type!r}")
+
+    probs = predict_proba([user_text])[0]
+    pred_label, severity_score, _ = classify_severity(probs)
+    confidence = float(max(probs))
+    intent_by_tool = {
+        "shap": "prediction_reason",
+        "rag": "knowledge",
+        "counterfactual": "actionable",
+        "hybrid": "hybrid",
+    }
+    plan = {
+        "intent": intent_by_tool[selected_tool],
+        "tools": [selected_tool],
+        "rationale": "Fixed controlled study mapping.",
+        "raw_plan": {},
+    }
+    evidence_blocks, errors = _collect_evidence(user_text, plan["tools"], fallback=fallback)
+
+    if not evidence_blocks:
+        raise RuntimeError(f"All selected MCP evidence tools failed. Errors: {' | '.join(errors)}")
+
+    explanation = _generate_response(user_text, user_question, pred_label, confidence, plan, evidence_blocks)
+    executed_tools = _execution_tools(plan["tools"])
+
+    return {
+        "selected_server": selected_tool,
+        "selected_tools": [selected_tool],
+        "executed_tools": executed_tools,
+        "fallback_used": any(e.startswith("fallback:") for e in errors),
+        "prediction": pred_label,
+        "confidence": confidence,
+        "severity_score": severity_score,
+        "intent": plan["intent"],
+        "planner_json": None,
+        "planner_validation": None,
+        "explanation": explanation,
+        "evidence": evidence_blocks,
+        "rationale": plan["rationale"],
+        "errors": errors,
+    }

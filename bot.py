@@ -51,6 +51,14 @@ from shared.training_examples import (
     save_prediction,
 )
 from shared.depression_model import predict_proba, classify_severity
+from study.response_store import (
+    QUESTION_TEXTS as STUDY_QUESTION_TEXTS,
+    StudyResponseNotFoundError,
+    StudyResponseStore,
+    SYSTEM_AGENTIC_XAI,
+    SYSTEM_MENTALLAMA as STORED_SYSTEM_MENTALLAMA,
+    stable_text_hash,
+)
 
 # ── Path setup ───────────────────────────────────────────────────────
 _ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -64,6 +72,7 @@ logging.basicConfig(
 logger = logging.getLogger("depression_bot")
 
 _MENTALLAMA_PIPELINE = None
+_STUDY_RESPONSE_STORE = None
 
 def _get_mcp_pipeline():
     from architecture.mcp_modular_agent.mcp_client import run_mcp_pipeline
@@ -191,33 +200,21 @@ def _join_box_lines(lines: list) -> str:
 
 
 QUESTION_TYPES = [
-    (
-        "parts",
-        "Which parts of Text Sample (Person {person}) contributed most to this prediction?",
-    ),
-    (
-        "change",
-        "What would need to be different in Text Sample (Person {person}) for the prediction to change?",
-    ),
-    (
-        "symptoms",
-        "Which symptoms or behaviours described in Text Sample (Person {person}) could have led to this prediction?",
-    ),
-    (
-        "findings",
-        "What are the main findings and pieces of evidence in Text Sample (Person {person}) that led to this result?",
-    ),
+    ("shap", STUDY_QUESTION_TEXTS["shap"]),
+    ("counterfactual", STUDY_QUESTION_TEXTS["counterfactual"]),
+    ("rag", STUDY_QUESTION_TEXTS["rag"]),
+    ("hybrid", STUDY_QUESTION_TEXTS["hybrid"]),
 ]
 
 QUESTION_BUTTON_LABELS = {
-    "parts": "Which text parts mattered most?",
-    "change": "What could change the prediction?",
-    "symptoms": "Which symptoms mattered?",
-    "findings": "What evidence supports it?",
+    "shap": STUDY_QUESTION_TEXTS["shap"],
+    "counterfactual": STUDY_QUESTION_TEXTS["counterfactual"],
+    "rag": STUDY_QUESTION_TEXTS["rag"],
+    "hybrid": STUDY_QUESTION_TEXTS["hybrid"],
 }
 
-SYSTEM_AGENTIC_MCP = "Agentic MCP XAI"
-SYSTEM_MENTALLAMA = "MentalLLaMA"
+SYSTEM_AGENTIC_MCP = SYSTEM_AGENTIC_XAI
+SYSTEM_MENTALLAMA = STORED_SYSTEM_MENTALLAMA
 EXPERIMENT_SYSTEMS = (SYSTEM_AGENTIC_MCP, SYSTEM_MENTALLAMA)
 
 EXPERIMENT_RATING_STATEMENTS = [
@@ -242,6 +239,10 @@ SEVERITY_DISTRIBUTIONS = [
 ]
 
 EXPERIMENT_LOG_PATH = os.path.join(_ROOT, "logs", "within_participant_experiment_records.csv")
+STUDY_RESPONSES_PATH = os.environ.get(
+    "STUDY_RESPONSES_PATH",
+    os.path.join(_ROOT, "data", "study_responses.json"),
+)
 
 
 # ── Central message handler ──────────────────────────────────────────
@@ -429,16 +430,25 @@ def _append_experiment_evaluation(row: dict):
     fieldnames = [
         "timestamp_utc",
         "user_id",
+        "participant_id",
         "session_id",
         "block_index",
         "trial_index",
+        "trial_number",
         "paragraph_id",
+        "passage_id",
+        "severity",
         "paragraph_text",
         "prediction_label",
         "prediction_confidence",
         "question_id",
+        "question_type",
         "question_text",
         "explanation_system",
+        "assigned_system",
+        "response_record_id",
+        "response_text_hash",
+        "response_retrieval_status",
         "explanation_text",
         "rating_answered",
         "rating_supported",
@@ -454,6 +464,29 @@ def _append_experiment_evaluation(row: dict):
         data = {key: row.get(key, "") for key in fieldnames}
         data["timestamp_utc"] = data["timestamp_utc"] or datetime.now(timezone.utc).isoformat()
         writer.writerow(data)
+
+
+def _get_study_response_store() -> StudyResponseStore:
+    global _STUDY_RESPONSE_STORE
+    if _STUDY_RESPONSE_STORE is None:
+        _STUDY_RESPONSE_STORE = StudyResponseStore(STUDY_RESPONSES_PATH)
+    return _STUDY_RESPONSE_STORE
+
+
+def _append_response_retrieval_issue(row: dict):
+    _append_experiment_evaluation({
+        **row,
+        "response_retrieval_status": row.get("response_retrieval_status", "missing"),
+    })
+
+
+def _get_saved_study_response(passage_id: str, question_type: str, system: str) -> dict:
+    store = _get_study_response_store()
+    return store.get_record(
+        passage_id=passage_id,
+        question_type=question_type,
+        system=system,
+    )
 
 
 async def _handle_experiment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -506,24 +539,44 @@ async def _handle_question_selection(update: Update, context: ContextTypes.DEFAU
     system = _assign_experiment_system(context, question_id)
 
     await _send_message(update, context, f"Selected: {_question_button_label(question_id)}")
-    await _send_message(update, context, "Generating explanation...")
 
     try:
-        if system == SYSTEM_AGENTIC_MCP:
-            _, explanation = _run_planner_answer(paragraph_text, question)
-        else:
-            explanation = _run_mentallama_answer(paragraph_text, question)
-    except Exception as exc:
-        logger.exception("Failed to generate %s explanation: %s", system, exc)
+        saved = _get_saved_study_response(paragraph_id, question_id, system)
+        explanation = saved["entry"]["response"]
+        response_record_id = saved["entry"].get("response_record_id", "")
+        response_text_hash = saved["entry"].get("response_hash") or stable_text_hash(explanation)
+        response_retrieval_status = "success"
+    except StudyResponseNotFoundError as exc:
+        logger.exception("Missing saved study response: %s", exc)
         if question_id not in context.user_data.get("block_remaining_question_ids", []):
             context.user_data.setdefault("block_remaining_question_ids", []).append(question_id)
         context.user_data["awaiting_question"] = True
+        _append_response_retrieval_issue({
+            "user_id": str(update.effective_user.id),
+            "participant_id": str(update.effective_user.id),
+            "session_id": context.user_data.get("session_id"),
+            "block_index": block_index,
+            "trial_index": sample_number,
+            "trial_number": sample_number,
+            "paragraph_id": paragraph_id,
+            "passage_id": paragraph_id,
+            "severity": context.user_data.get("current_paragraph_severity", ""),
+            "paragraph_text": paragraph_text,
+            "prediction_label": label,
+            "prediction_confidence": conf,
+            "question_id": question_id,
+            "question_type": question_id,
+            "question_text": question,
+            "explanation_system": system,
+            "assigned_system": system,
+            "response_retrieval_status": "missing",
+        })
         await _send_message(
             update,
             context,
             _format_box(
-                "Generation Failed",
-                "Something went wrong while generating the explanation. Please choose a question again.",
+                "Administrator Error",
+                "A saved explanation is missing for this trial. Please contact the study administrator.",
             ),
         )
         return
@@ -538,14 +591,22 @@ async def _handle_question_selection(update: Update, context: ContextTypes.DEFAU
         "session_id": context.user_data.get("session_id"),
         "block_index": block_index,
         "trial_index": sample_number,
+        "trial_number": sample_number,
         "paragraph_id": paragraph_id,
+        "passage_id": paragraph_id,
+        "severity": context.user_data.get("current_paragraph_severity", ""),
         "paragraph_text": paragraph_text,
         "prediction_label": label,
         "prediction_confidence": conf,
         "question_id": question_id,
+        "question_type": question_id,
         "question_text": question,
         "explanation_system": system,
+        "assigned_system": system,
         "explanation_text": explanation,
+        "response_record_id": response_record_id,
+        "response_text_hash": response_text_hash,
+        "response_retrieval_status": response_retrieval_status,
         "ratings": {key: None for key, _ in EXPERIMENT_RATING_STATEMENTS},
         "step": 0,
         "prompt_message_id": None,
@@ -621,16 +682,25 @@ async def _finish_experiment_trial(update: Update, context: ContextTypes.DEFAULT
     ratings = flow["ratings"]
     _append_experiment_evaluation({
         "user_id": str(update.effective_user.id),
+        "participant_id": str(update.effective_user.id),
         "session_id": flow["session_id"],
         "block_index": flow["block_index"],
         "trial_index": flow["trial_index"],
+        "trial_number": flow.get("trial_number", flow["trial_index"]),
         "paragraph_id": flow["paragraph_id"],
+        "passage_id": flow.get("passage_id", flow["paragraph_id"]),
+        "severity": flow.get("severity", ""),
         "paragraph_text": flow["paragraph_text"],
         "prediction_label": flow["prediction_label"],
         "prediction_confidence": flow["prediction_confidence"],
         "question_id": flow["question_id"],
+        "question_type": flow.get("question_type", flow["question_id"]),
         "question_text": flow["question_text"],
         "explanation_system": flow["explanation_system"],
+        "assigned_system": flow.get("assigned_system", flow["explanation_system"]),
+        "response_record_id": flow.get("response_record_id", ""),
+        "response_text_hash": flow.get("response_text_hash", stable_text_hash(flow["explanation_text"])),
+        "response_retrieval_status": flow.get("response_retrieval_status", ""),
         "explanation_text": flow["explanation_text"],
         "rating_answered": ratings.get("answered", ""),
         "rating_supported": ratings.get("supported", ""),
@@ -715,7 +785,7 @@ def _run_mentallama_answer(paragraph_text: str, question: str) -> str:
 
     do_sample = os.environ.get("MENTALLAMA_DO_SAMPLE", "false").lower() == "true"
     generation_kwargs = {
-        "max_new_tokens": int(os.environ.get("MENTALLAMA_MAX_NEW_TOKENS", "1024")),
+        "max_new_tokens": int(os.environ.get("MENTALLAMA_MAX_NEW_TOKENS", "256")),
         "do_sample": do_sample,
         "pad_token_id": tokenizer.eos_token_id,
     }
